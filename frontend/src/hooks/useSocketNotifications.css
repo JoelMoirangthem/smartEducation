@@ -1,0 +1,117 @@
+/* Base Toast Styles */
+.Toastify__toast {
+    border-radius: 16px !important;
+    backdrop-filter: blur(12px) !important;
+    font-family: 'Inter', sans-serif !important;
+    padding: 12px 16px !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.custom-toast {
+    padding: 4px;
+}
+
+.toast-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+}
+
+.toast-content {
+    font-size: 0.8rem;
+    line-height: 1.5;
+    opacity: 0.85;
+}
+
+.toast-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.65rem;
+    opacity: 0.6;
+}
+
+/* 📊 Marks Theme - Premium Glassmorphism */
+.marks-toast-premium {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.95), rgba(79, 70, 229, 0.98)) !important;
+    border-left: 6px solid #fbbf24 !important;
+    box-shadow: 0 20px 50px rgba(99, 102, 241, 0.3) !important;
+}
+
+.marks-toast-premium .toast-title {
+    color: #fbbf24 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    padding-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.marks-toast-premium .toast-title::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    background: #fbbf24;
+    border-radius: 50%;
+    display: inline-block;
+    animation: sync-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes sync-pulse {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+        box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.7);
+    }
+
+    70% {
+        transform: scale(1.5);
+        opacity: 0.3;
+        box-shadow: 0 0 0 10px rgba(251, 191, 36, 0);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+        box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
+    }
+}
+
+/* 📢 Notice Themes - Glassmorphism style */
+.notice-toast {
+    background: rgba(30, 41, 59, 0.95) !important;
+    color: white !important;
+}
+
+.notice-toast.priority-urgent {
+    background: rgba(239, 68, 68, 0.15) !important;
+    border: 1px solid rgba(239, 68, 68, 0.4) !important;
+    border-left: 5px solid #ef4444 !important;
+}
+
+.notice-toast.priority-high {
+    background: rgba(249, 115, 22, 0.1) !important;
+    border-left: 5px solid #f97316 !important;
+}
+
+.notice-toast.priority-medium {
+    border-left: 5px solid #6366f1 !important;
+}
+
+.notice-toast.priority-low {
+    border-left: 5px solid #10b981 !important;
+}
+
+.toast-title {
+    color: #fff !important;
+}
+
+.toast-content {
+    color: rgba(255, 255, 255, 0.85) !important;
+}
