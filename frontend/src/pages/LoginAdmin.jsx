@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import AuthLayout, { AuthField } from "../components/AuthLayout";
+import api from "../services/api";
 
 const LoginAdmin = () => {
     const [email, setEmail] = useState("");
@@ -12,21 +13,12 @@ const LoginAdmin = () => {
         e.preventDefault();
         setLoading(true); setError("");
         try {
-            const res = await fetch("http://localhost:5000/api/v1/auth/login", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, password, role: "admin" }),
-            });
-            const data = await res.json();
-            if (res.ok) {
-                localStorage.setItem("token", data.token);
-                localStorage.setItem("user", JSON.stringify(data.user));
-                window.location.href = "/admin/dashboard";
-            } else {
-                setError(data.message || "Login failed");
-            }
-        } catch {
-            setError("Network error. Please try again.");
+            const { data } = await api.post("/auth/login", { email, password, role: "admin" });
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+            window.location.href = "/admin/dashboard";
+        } catch (err) {
+            setError(err.response?.data?.message || "Login failed. Please try again.");
         } finally { setLoading(false); }
     };
 

@@ -10,6 +10,11 @@ const chatSessionSchema = new mongoose.Schema({
         type: String,
         default: "New Chat"
     },
+    mode: {
+        type: String,
+        enum: ["tutor", "agent"],
+        default: "tutor"
+    },
     messages: [
         {
             role: {
@@ -21,6 +26,21 @@ const chatSessionSchema = new mongoose.Schema({
                 type: String,
                 required: true
             },
+            // Agent-mode activity trail (absent on tutor messages)
+            meta: {
+                intent: String,
+                subagent: String,
+                reasoning: String,
+                steps: [
+                    {
+                        name: String,
+                        label: String,
+                        status: String,
+                        duration: Number,
+                        detail: String
+                    }
+                ]
+            },
             timestamp: {
                 type: Date,
                 default: Date.now
@@ -28,5 +48,8 @@ const chatSessionSchema = new mongoose.Schema({
         }
     ]
 }, { timestamps: true });
+
+// Auto-delete sessions older than 30 days to prevent unbounded growth
+chatSessionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
 module.exports = mongoose.model("ChatSession", chatSessionSchema);

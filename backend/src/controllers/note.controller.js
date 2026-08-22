@@ -1,10 +1,16 @@
 const Note = require("../models/note.model.js");
 const Subject = require("../models/subject.model.js");
+const Class = require("../models/class.model.js");
+const User = require("../models/user.model.js");
 const cloudinary = require("../config/cloudinary");
 const streamifier = require("streamifier");
 const axios = require("axios");
 const fs = require("fs");
+const fsp = require("fs").promises;
 const path = require("path");
+
+// Consistent storage root regardless of where the process is launched from
+const UPLOADS_ROOT = path.join(__dirname, '../../uploads');
 
 // ================= UPLOAD NOTE =================
 const uploadNote = async (req, res) => {
@@ -27,25 +33,31 @@ const uploadNote = async (req, res) => {
         }
 
         // --- LOCAL STORAGE STRATEGY (Alternative to Cloudinary) ---
-        const projectRoot = process.cwd();
-        const listDir = path.join(projectRoot, "uploads", "notes");
-
-        console.log(`>>> [UPLOAD] Project Root: ${projectRoot}`);
-        console.log(`>>> [UPLOAD] Targeting Directory: ${listDir}`);
+        const listDir = path.join(UPLOADS_ROOT, "notes");
 
         if (!fs.existsSync(listDir)) {
             fs.mkdirSync(listDir, { recursive: true });
             console.log(">>> [UPLOAD] Created missing directory");
         }
 
-        const fileName = `${Date.now()}_${req.file.originalname.replace(/\s+/g, '_')}`;
+        // Sanitize the client-supplied filename: keep the basename only, strip
+        // path separators/control chars, and enforce a safe whitelist so
+        // path.join can never escape uploads/notes/
+        const safeName = path.basename(req.file.originalname)
+            .replace(/[^a-zA-Z0-9._-]/g, '_')
+            .replace(/^\.+/, '_')
+            .slice(0, 120) || 'upload';
+        const fileName = `${Date.now()}_${safeName}`;
         const filePath = path.join(listDir, fileName);
+        if (!filePath.startsWith(listDir + path.sep)) {
+            return res.status(400).json({ message: "Invalid filename" });
+        }
 
         console.log(`>>> [UPLOAD] Attempting to write file: ${filePath}`);
         console.log(`>>> [UPLOAD] Buffer size: ${req.file.buffer?.length || 0} bytes`);
 
-        // Write buffer to local disk
-        fs.writeFileSync(filePath, req.file.buffer);
+        // Write buffer to local disk (async, non-blocking)
+        await fsp.writeFile(filePath, req.file.buffer);
         console.log(">>> [UPLOAD] Write operation complete.");
 
         // Store relative URL for accessibility (with leading slash for consistency)
@@ -83,7 +95,11 @@ const uploadNote = async (req, res) => {
 const getNotes = async (req, res) => {
     try {
         const { subjectId } = req.query;
-        const { classId, role, id: userId } = req.user;
+        const { role, id: userId } = req.user;
+
+        // Fetch live classId (JWT may be stale)
+        const user = await User.findById(userId).select("classId");
+        const classId = user?.classId?.toString() || null;
 
         let query = {};
 
@@ -158,9 +174,12 @@ const deleteNote = async (req, res) => {
 
         if (note.publicId) {
             // Attempt to delete local file first
-            const localPath = path.join(process.cwd(), "uploads", "notes", note.publicId);
+            const localPath = path.join(UPLOADS_ROOT, "notes", note.publicId);
+            if (!localPath.startsWith(path.join(UPLOADS_ROOT, "notes") + path.sep)) {
+                return res.status(400).json({ message: "Invalid stored file reference" });
+            }
             if (fs.existsSync(localPath)) {
-                fs.unlinkSync(localPath);
+                await fsp.unlink(localPath);
                 console.log(`>>> [PURGE] Deleted local file: ${localPath}`);
             } else {
                 // Fallback to Cloudinary if it's a remote file
@@ -198,8 +217,28 @@ const downloadNote = async (req, res) => {
         else if (note.uploadedBy.toString() === userId) hasAccess = true;
         else if (role === 'student' && tokenClassId && note.classId.toString() === tokenClassId.toString()) hasAccess = true;
         else if (role === 'teacher') {
-            // Allow teachers to download materials to facilitate academic review/collaboration
-            hasAccess = true;
+            // Restricted: teacher must manage the note's class OR teach its subject
+            const teacher = await User.findById(userId).select('managedClassIds classId assignedSubjectIds');
+            const owningIds = [];
+            if (teacher) {
+                owningIds.push(...(teacher.managedClassIds || []).map(c => c.toString()));
+                if (teacher.classId) owningIds.push(teacher.classId.toString());
+            }
+            const managesClass = note.classId && owningIds.includes(note.classId.toString());
+
+            let teachesSubject = false;
+            if (note.subjectId && teacher) {
+                teachesSubject = (teacher.assignedSubjectIds || []).some(s => s.toString() === String(note.subjectId));
+            }
+            // Cross-check authoritative models too
+            const [cls, subj] = await Promise.all([
+                Class.findById(note.classId),
+                note.subjectId ? Subject.findById(note.subjectId) : null
+            ]);
+            const isClassTeacher = cls && cls.classTeacher && cls.classTeacher.toString() === userId;
+            const isSubjectTeacher = subj && (subj.teachers || []).some(t => t.toString() === userId);
+
+            hasAccess = managesClass || teachesSubject || isClassTeacher || isSubjectTeacher;
         }
 
         if (!hasAccess) {
@@ -221,8 +260,10 @@ const downloadNote = async (req, res) => {
         // --- UNIFIED TRANSMISSION STRATEGY (Local & Remote) ---
         if (note.fileUrl.startsWith("/uploads/")) {
             // HIGH-FIDELITY LOCAL DELIVERY
-            const relPath = note.fileUrl.startsWith("/") ? note.fileUrl.slice(1) : note.fileUrl;
-            const absolutePath = path.join(process.cwd(), relPath);
+            const absolutePath = path.join(UPLOADS_ROOT, 'notes', note.publicId);
+            if (!absolutePath.startsWith(path.join(UPLOADS_ROOT, 'notes') + path.sep)) {
+                return res.status(400).json({ message: "Invalid stored file reference" });
+            }
 
             console.log(`>>> [TRANSFER] Syncing file from: ${absolutePath}`);
 

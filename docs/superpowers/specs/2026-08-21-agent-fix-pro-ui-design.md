@@ -1,7 +1,7 @@
 # Agent Platform Fix + Pro UI Rebuild — Design
 
 **Date:** 2026-08-21
-**Status:** Approved, pending implementation
+**Status:** Implemented & verified (see Verification log at bottom)
 **Builds on:** `2026-08-21-langgraph-supervisor-design.md` (Python LangGraph supervisor, SSE protocol)
 
 ## Goal
@@ -115,3 +115,28 @@ frontend/src/components/chat/
 
 - Wire protocol changes, new endpoints, Python-side schema changes beyond internal cleanups.
 - Voice, proactive/scheduled agents, multi-agent parallelism.
+
+## Verification log (2026-08-21, post-implementation)
+
+All §6 checks pass. Three additional bugs were found and fixed during live verification:
+
+1. **`main.py` missing `import asyncio`** — registry refresh crashed every turn
+   (`registry load failed: name 'asyncio' is not defined`), so the agent ran with
+   0 tools and never called any. Added the import.
+2. **Empty tool summaries** — `on_tool_end` output is a `ToolMessage`, not a raw
+   string; `str()` of it broke `json.loads`, falling into the no-summary branch.
+   `service.py` now unwraps `.content` first (and falls back to truncated text).
+3. **Silently dropped tool arguments** — langchain-core ≥1.x treats a zero-field
+   BaseModel `args_schema` as a no-arg tool and calls the coroutine with no
+   kwargs (`tools/base.py` fast path). Every write tool executed with empty args
+   after approval. Replaced `AnyArgs` with a free-form JSON-schema dict
+   (`additionalProperties: true`) in `tools.py`.
+
+Also fixed during verification: LangGraph's approval-resume node replay emitted a
+duplicate `tool_start`; the Node gateway now suppresses it so live timelines and
+persisted `meta` keep a single row per tool call.
+
+Verified live: read tools with durations, write → approval card → approve →
+executed + timeline continued, reject → `rejected` row + nothing written to DB,
+persisted `meta` renders on session reload, tutor chat regression OK,
+`npm run build` passes, no orchestrator references remain.

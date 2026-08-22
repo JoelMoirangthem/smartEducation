@@ -136,8 +136,8 @@ const updateMark = async (req, res) => {
         }
 
         mark.marksObtained = marksObtained !== undefined ? marksObtained : mark.marksObtained;
-        mark.maxMarks = maxMarks || mark.maxMarks;
-        mark.feedback = feedback || mark.feedback;
+        mark.maxMarks = maxMarks !== undefined ? maxMarks : mark.maxMarks;
+        mark.feedback = feedback !== undefined ? feedback : mark.feedback;
         mark.updatedBy = teacherId;
 
         await mark.save();

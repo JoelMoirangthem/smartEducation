@@ -1,11 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
-
-const API_URL = 'http://localhost:5000/api/v1';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import api from '../services/api';
 
 const VideoFaceRecognition = ({ sessionId, onAttendanceMarked }) => {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
+    const streamRef = useRef(null);
+    const onAttendanceMarkedRef = useRef(onAttendanceMarked);
+
+    useEffect(() => {
+        onAttendanceMarkedRef.current = onAttendanceMarked;
+    });
 
     const [stream, setStream] = useState(null);
     const [isScanning, setIsScanning] = useState(false);
@@ -35,14 +39,21 @@ const VideoFaceRecognition = ({ sessionId, onAttendanceMarked }) => {
         }
     };
 
-    // Stop webcam
-    const stopCamera = () => {
-        if (stream) {
-            stream.getTracks().forEach(track => track.stop());
-            setStream(null);
+    // Stop webcam — must clear the `stream` state too, otherwise the UI
+    // stays in "camera on" mode and can never be restarted
+    const stopCamera = useCallback(() => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
         }
+        if (videoRef.current) videoRef.current.srcObject = null;
+        setStream(null);
         setIsScanning(false);
-    };
+    }, []);
+
+    useEffect(() => {
+        streamRef.current = stream;
+    }, [stream]);
 
     // Capture frame from video
     const captureFrame = () => {
@@ -61,18 +72,15 @@ const VideoFaceRecognition = ({ sessionId, onAttendanceMarked }) => {
     };
 
     // Recognize face in frame
-    const recognizeFace = async (imageData) => {
+    const recognizeFace = useCallback(async (imageData) => {
         try {
             const token = localStorage.getItem('token');
 
-            const response = await axios.post(
-                `${API_URL}/face-attendance/mark`,
+            const response = await api.post(
+                '/face-attendance/mark',
                 {
                     sessionId,
                     image: imageData
-                },
-                {
-                    headers: { Authorization: `Bearer ${token}` }
                 }
             );
 
@@ -81,48 +89,55 @@ const VideoFaceRecognition = ({ sessionId, onAttendanceMarked }) => {
             console.error('Recognition error:', err);
             return { recognized: false };
         }
-    };
+    }, [sessionId]);
 
     // Auto-scan loop
     useEffect(() => {
         if (!isScanning || !stream) return;
 
+        let inFlight = false;
         const interval = setInterval(async () => {
+            if (inFlight) return; // skip tick if previous request hasn't completed
             const frame = captureFrame();
             if (!frame) return;
 
             setProcessingCount(prev => prev + 1);
+            inFlight = true;
 
-            const result = await recognizeFace(frame);
+            try {
+                const result = await recognizeFace(frame);
 
-            if (result.recognized && !result.alreadyMarked) {
-                setRecognizedStudent({
-                    name: result.student?.name || 'Student',
-                    confidence: result.confidence,
-                    markedAt: new Date()
-                });
+                if (result.recognized && !result.alreadyMarked) {
+                    setRecognizedStudent({
+                        name: result.student?.name || 'Student',
+                        confidence: result.confidence,
+                        markedAt: new Date()
+                    });
 
-                // Notify parent component
-                if (onAttendanceMarked) {
-                    onAttendanceMarked(result);
+                    // Notify parent component
+                    if (onAttendanceMarkedRef.current) {
+                        onAttendanceMarkedRef.current(result);
+                    }
+
+                    // Show success for 3 seconds
+                    setTimeout(() => {
+                        setRecognizedStudent(null);
+                    }, 3000);
                 }
-
-                // Show success for 3 seconds
-                setTimeout(() => {
-                    setRecognizedStudent(null);
-                }, 3000);
+            } finally {
+                inFlight = false;
             }
         }, 500); // Process 2 frames per second
 
         return () => clearInterval(interval);
-    }, [isScanning, stream, sessionId]);
+    }, [isScanning, recognizeFace, stream]);
 
     // Cleanup on unmount
     useEffect(() => {
         return () => {
             stopCamera();
         };
-    }, []);
+    }, [stopCamera]);
 
     return (
         <div className="max-w-4xl mx-auto p-6">

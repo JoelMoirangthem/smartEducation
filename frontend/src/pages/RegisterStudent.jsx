@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { GraduationCap } from "lucide-react";
+import { toast } from "react-toastify";
 import AuthLayout, { AuthField } from "../components/AuthLayout";
+import api from "../services/api";
 
 const RegisterStudent = () => {
     const [name, setName] = useState("");
@@ -15,16 +17,11 @@ const RegisterStudent = () => {
         e.preventDefault();
         setLoading(true); setError("");
         try {
-            const res = await fetch("http://localhost:5000/api/v1/auth/register", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, email, password, role: "student" }),
-            });
-            const data = await res.json();
-            if (res.ok) { navigate("/login/student"); }
-            else { setError(data.message || "Registration failed"); }
-        } catch {
-            setError("Network error. Please try again.");
+            const { data } = await api.post("/auth/register", { name, email, password, role: "student" });
+            toast.success("Account created! Please sign in to continue.");
+            navigate("/login/student");
+        } catch (err) {
+            setError(err.response?.data?.message || "Network error. Please try again.");
         } finally { setLoading(false); }
     };
 

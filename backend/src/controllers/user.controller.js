@@ -92,11 +92,16 @@ const getStudentsByClass = async (req, res) => {
             return res.status(403).json({ message: "Access denied. Teachers only." });
         }
 
-        if (!teacher.classId) {
+        // Gather all classes the teacher manages (managedClassIds + legacy classId)
+        const classIds = new Set();
+        if (teacher.classId) classIds.add(teacher.classId.toString());
+        (teacher.managedClassIds || []).forEach(c => classIds.add(c.toString()));
+
+        if (classIds.size === 0) {
             return res.status(400).json({ message: "Teacher is not assigned to any class." });
         }
 
-        const students = await User.find({ role: "student", classId: teacher.classId }).select("-password");
+        const students = await User.find({ role: "student", classId: { $in: [...classIds] } }).select("-password");
         res.json(students);
     } catch (error) {
         console.error("Error fetching students:", error);
@@ -110,7 +115,7 @@ const getTeacherSubjects = async (req, res) => {
     const rawRole = req.user?.role || "";
     const userRole = rawRole.toLowerCase().trim();
 
-    console.log(`>>> [Attendance] Auth Context - User ID: ${userId}, Role: ${userRole}`);
+    console.log(`>>> [Subjects] Auth Context - User ID: ${userId}, Role: ${userRole}`);
 
     try {
         if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {

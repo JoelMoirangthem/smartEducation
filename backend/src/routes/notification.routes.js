@@ -10,6 +10,6 @@ router.get("/", getUserNotifications);
 router.post("/", createNotification); // Exposed for testing/admin use
 router.put("/read-all", markAllAsRead);
 router.put("/:id/read", markAsRead);
-router.delete("/read", deleteReadNotifications);
+router.delete("/read-cleared", deleteReadNotifications);
 
 module.exports = router;

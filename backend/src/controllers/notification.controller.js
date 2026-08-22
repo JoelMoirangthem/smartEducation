@@ -18,7 +18,16 @@ const getUserNotifications = async (req, res) => {
 
 const createNotification = async (req, res) => {
     try {
+        // Only admins may create notifications for arbitrary recipients (spam prevention)
+        if (req.user.role !== "admin") {
+            return res.status(403).json({ message: "Only admins can create notifications" });
+        }
+
         const { recipient, message, type, relatedId } = req.body;
+        if (!recipient || !message) {
+            return res.status(400).json({ message: "recipient and message are required" });
+        }
+
         const notification = await Notification.create({
             userId: recipient, // Map recipient from body to userId in model
             message,

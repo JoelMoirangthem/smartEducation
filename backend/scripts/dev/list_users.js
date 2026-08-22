@@ -1,10 +1,11 @@
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 const mongoose = require("mongoose");
-const User = require("./src/models/user.model");
-require("dotenv").config();
+const User = require("../../src/models/user.model");
 
 const listUsers = async () => {
     try {
-        await mongoose.connect(process.env.MONGO_URI);
+        await mongoose.connect(process.env.MONGODB_URI);
         console.log("Connected to DB");
 
         const users = await User.find({});

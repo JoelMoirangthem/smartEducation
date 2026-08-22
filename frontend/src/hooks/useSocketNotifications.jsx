@@ -1,11 +1,30 @@
-import React, { useEffect, useState } from 'react';
-import { initializeSocket, disconnectSocket, getSocket } from '../services/socket.service';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { initializeSocket, disconnectSocket } from '../services/socket.service';
 import { toast } from 'react-toastify';
 import { jwtDecode } from "jwt-decode";
 import './useSocketNotifications.css';
 
 const useSocketNotifications = () => {
     const [isConnected, setIsConnected] = useState(false);
+
+    const soundAvailable = useRef(null);
+
+    const playNotificationSound = useCallback(() => {
+        try {
+            if (soundAvailable.current === false) return;
+            const audio = new Audio('/notification.mp3');
+            audio.volume = 0.3;
+            audio.play()
+                .then(() => { soundAvailable.current = true; })
+                .catch((err) => {
+                    // 404 or blocked autoplay: disable sound silently, keep notifications working
+                    if (soundAvailable.current === null) soundAvailable.current = false;
+                    console.log('Audio play failed:', err);
+                });
+        } catch {
+            soundAvailable.current = false;
+        }
+    }, []);
 
     useEffect(() => {
         let user = JSON.parse(localStorage.getItem('user'));
@@ -127,17 +146,7 @@ const useSocketNotifications = () => {
         return () => {
             disconnectSocket();
         };
-    }, []);
-
-    const playNotificationSound = () => {
-        try {
-            const audio = new Audio('/notification.mp3');
-            audio.volume = 0.3;
-            audio.play().catch(err => console.log('Audio play failed:', err));
-        } catch (err) {
-            // Silently fail if audio not available
-        }
-    };
+    }, [playNotificationSound]);
 
     return { isConnected };
 };

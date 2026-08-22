@@ -6,7 +6,9 @@ import { initializeSocket } from "../services/socket.service";
 import { Bell, Send, Clock, User, Loader2, Filter, X } from "lucide-react";
 import { Card, PageHeader, Spinner, Btn, Select, Label, Input, Textarea, Empty, Badge, SectionTitle } from "../components/PageLayout";
 
-const API = "http://localhost:5000/api";
+import api from '../services/api';
+// Strip the trailing /v1 segment — this page appends /v1/... to build URLs
+const API = api.defaults.baseURL.replace(/\/v1$/, '');
 
 const P_COLOR = {
     urgent: { bg: 'rgba(239, 68, 68, 0.12)', text: '#ef4444', border: 'rgba(239, 68, 68, 0.25)', label: 'CRITICAL' },
@@ -61,19 +63,34 @@ export default function Notices() {
         if (!token) return;
         try {
             const decoded = jwtDecode(token);
-            setUser(decoded);
-            if (decoded.role === "teacher" && decoded.managedClassIds?.length > 0) {
-                setForm(p => ({ ...p, classId: decoded.managedClassIds[0] }));
-            }
-            fetchNotices(token);
-            fetchAcademic(token, decoded.role);
+            Promise.resolve().then(() => {
+                setUser(decoded);
+                if (decoded.role === "teacher" && decoded.managedClassIds?.length > 0) {
+                    setForm(p => ({ ...p, classId: decoded.managedClassIds[0] }));
+                }
+            });
+            let noticesUrl = `${API}/v1/notices?limit=50`;
+            if (filterSubject) noticesUrl += `&subjectId=${filterSubject}`;
+            axios.get(noticesUrl, { headers: { Authorization: `Bearer ${token}` } })
+                .then(res => { setNotices(res.data.notices || []); setLoading(false); })
+                .catch(e => { console.error(e); setLoading(false); });
+            const acadBase = decoded.role === 'admin' ? `${API}/v1/admin` : `${API}/v1/user`;
+            Promise.all([
+                axios.get(`${acadBase}/classes`, { headers: { Authorization: `Bearer ${token}` } }),
+                axios.get(`${acadBase}/subjects`, { headers: { Authorization: `Bearer ${token}` } }),
+            ])
+                .then(([c, s]) => {
+                    if (decoded.role === 'admin') { setClasses(c.data.classes || []); setSubjects(s.data.subjects || []); }
+                    else { setClasses(c.data || []); setSubjects(s.data || []); }
+                })
+                .catch(() => { /* ignore academic fetch errors */ });
             const socket = initializeSocket(decoded.id, decoded.classId, decoded.role);
             if (socket) {
                 const h = n => setNotices(prev => prev.some(x => x._id === n._id) ? prev : [n, ...prev]);
                 socket.on("notice_created", h);
                 return () => socket.off("notice_created", h);
             }
-        } catch { }
+        } catch { /* token decode failed */ }
     }, [filterSubject]);
 
     const fetchNotices = async (tk) => {
@@ -84,24 +101,6 @@ export default function Notices() {
             setNotices(res.data.notices || []);
         } catch (e) { console.error(e); }
         setLoading(false);
-    };
-
-    const fetchAcademic = async (tk, role) => {
-        try {
-            if (role === 'admin') {
-                const [c, s] = await Promise.all([
-                    axios.get(`${API}/v1/admin/classes`, { headers: { Authorization: `Bearer ${tk}` } }),
-                    axios.get(`${API}/v1/admin/subjects`, { headers: { Authorization: `Bearer ${tk}` } }),
-                ]);
-                setClasses(c.data.classes || []); setSubjects(s.data.subjects || []);
-            } else {
-                const [c, s] = await Promise.all([
-                    axios.get(`${API}/v1/user/classes`, { headers: { Authorization: `Bearer ${tk}` } }),
-                    axios.get(`${API}/v1/user/subjects`, { headers: { Authorization: `Bearer ${tk}` } }),
-                ]);
-                setClasses(c.data || []); setSubjects(s.data || []);
-            }
-        } catch { }
     };
 
     const handlePost = async (e) => {

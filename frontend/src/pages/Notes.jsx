@@ -9,7 +9,8 @@ import {
 import { Card, PageHeader, Spinner, Btn, Select, Label, Input, Textarea, Empty, Badge, SectionTitle } from "../components/PageLayout";
 import { toast } from 'react-toastify';
 
-const API = "http://localhost:5000/api/v1";
+import api from '../services/api';
+const API = api.defaults.baseURL;
 const ACCENT_COLOR = "#fb923c";
 
 const fileIcon = (type) => {
@@ -55,9 +56,14 @@ export default function Notes() {
         if (!token) return;
         try {
             const decoded = jwtDecode(token);
-            setUser(decoded);
-            fetchNotes(token);
-            fetchSubjects(token);
+            Promise.resolve().then(() => setUser(decoded));
+            const notesUrl = filterSubjectId ? `${API}/notes?subjectId=${filterSubjectId}` : `${API}/notes`;
+            axios.get(notesUrl, { headers: { Authorization: `Bearer ${token}` } })
+                .then(res => { setNotes(res.data || []); setLoading(false); })
+                .catch(() => { setLoading(false); });
+            axios.get(`${API}/user/subjects`, { headers: { Authorization: `Bearer ${token}` } })
+                .then(res => setSubjects(res.data || []))
+                .catch(() => { /* ignore subject fetch errors */ });
 
             const socket = initializeSocket(decoded.id, decoded.classId, decoded.role);
             if (socket) {
@@ -82,14 +88,8 @@ export default function Notes() {
             const url = filterSubjectId ? `${API}/notes?subjectId=${filterSubjectId}` : `${API}/notes`;
             const res = await axios.get(url, { headers: { Authorization: `Bearer ${tk}` } });
             setNotes(res.data || []);
-        } catch { }
+        } catch { /* ignore refresh errors */ }
         setLoading(false);
-    };
-    const fetchSubjects = async (tk) => {
-        try {
-            const res = await axios.get(`${API}/user/subjects`, { headers: { Authorization: `Bearer ${tk}` } });
-            setSubjects(res.data || []);
-        } catch { }
     };
 
     const validateFile = (f) => {

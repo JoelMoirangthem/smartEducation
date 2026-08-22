@@ -3,11 +3,17 @@ const AttendanceRecord = require("../models/attendanceRecord.model");
 const Subject = require("../models/subject.model");
 const User = require("../models/user.model");
 
+const isTeacherOrAdmin = (user) => user.role === "teacher" || user.role === "admin";
+
 // 1. Teacher starts a session
 const startSession = async (req, res) => {
     try {
         const { subjectId, classId } = req.body;
         const teacherId = req.user.id;
+
+        if (req.user.role !== "teacher") {
+            return res.status(403).json({ message: "Only teachers can start attendance sessions" });
+        }
 
         if (!subjectId || !classId) {
             return res.status(400).json({ message: "subjectId and classId are required" });
@@ -61,15 +67,25 @@ const markAttendance = async (req, res) => {
         const { sessionId, deviceId } = req.body;
         const studentId = req.user.id;
 
+        if (req.user.role !== "student") {
+            return res.status(403).json({ message: "Only students can mark attendance" });
+        }
+
         if (!deviceId) return res.status(400).json({ message: "Device ID required" });
 
         // Verify session validity
         const session = await AttendanceSession.findById(sessionId);
         if (!session) return res.status(404).json({ message: "Session not found" });
-        if (!session.isActive) return res.status(400).json({ message: "Session expired" });
+        if (!session.isActive || session.expiresAt < new Date()) {
+            return res.status(400).json({ message: "Session expired" });
+        }
 
-        // Check if student is in the correct class
-        if (req.user.classId.toString() !== session.classId.toString()) {
+        // Check student is in the correct class (fetch live data, JWT classId may be stale)
+        const student = await User.findById(studentId);
+        if (!student || student.role !== "student") {
+            return res.status(403).json({ message: "Student account not found" });
+        }
+        if (!student.classId || student.classId.toString() !== session.classId.toString()) {
             return res.status(403).json({ message: "You are not in this class" });
         }
 
@@ -97,7 +113,6 @@ const markAttendance = async (req, res) => {
         // Real-time update via Socket
         const io = req.app.get("io");
         if (io) {
-            const student = await User.findById(studentId);
             io.to(`class:${session.classId}`).emit("attendance_update", {
                 studentName: student.name,
                 studentId,
@@ -116,13 +131,25 @@ const markAttendance = async (req, res) => {
 const getSessionStats = async (req, res) => {
     try {
         const { sessionId } = req.query;
+
+        if (!isTeacherOrAdmin(req.user)) {
+            return res.status(403).json({ message: "Only teachers can view session stats" });
+        }
+
         let session;
 
         if (sessionId) {
             session = await AttendanceSession.findById(sessionId);
+            if (session && req.user.role !== "admin" && session.teacherId.toString() !== req.user.id) {
+                return res.status(403).json({ message: "You can only view your own sessions" });
+            }
         } else {
-            // Find any active session for the teacher
-            session = await AttendanceSession.findOne({ teacherId: req.user.id, isActive: true });
+            // Find any active session for the teacher (unexpired only)
+            session = await AttendanceSession.findOne({
+                teacherId: req.user.id,
+                isActive: true,
+                expiresAt: { $gt: new Date() }
+            });
         }
 
         if (!session) return res.json({ isActive: false });
@@ -156,7 +183,16 @@ const endSession = async (req, res) => {
     try {
         const { sessionId } = req.body;
 
+        if (!isTeacherOrAdmin(req.user)) {
+            return res.status(403).json({ message: "Only teachers can end sessions" });
+        }
+
         if (sessionId) {
+            const session = await AttendanceSession.findById(sessionId);
+            if (!session) return res.status(404).json({ message: "Session not found" });
+            if (req.user.role !== "admin" && session.teacherId.toString() !== req.user.id) {
+                return res.status(403).json({ message: "You can only end your own sessions" });
+            }
             await AttendanceSession.findByIdAndUpdate(sessionId, { isActive: false });
         } else {
             // End all active sessions for this teacher
@@ -175,13 +211,18 @@ const endSession = async (req, res) => {
 // 4. Get Student's Subject-wise Attendance
 const getStudentSubjectStats = async (req, res) => {
     try {
-        const studentId = req.user.id;
-        const { classId } = req.user;
+        if (req.user.role !== "student") {
+            return res.status(403).json({ message: "Only students can view attendance stats" });
+        }
 
-        if (!classId) return res.status(400).json({ message: "Student must belong to a class" });
+        const studentId = req.user.id;
+
+        // Fetch live classId (JWT may be stale)
+        const student = await User.findById(studentId);
+        if (!student || !student.classId) return res.status(400).json({ message: "Student must belong to a class" });
 
         // Find all subjects for this class
-        const subjects = await Subject.find({ classId });
+        const subjects = await Subject.find({ classId: student.classId });
 
         const stats = await Promise.all(subjects.map(async (subject) => {
             // Find all sessions for this subject
@@ -219,6 +260,13 @@ const exportSessionAttendance = async (req, res) => {
 
         if (!session) return res.status(404).json({ message: "Session not found" });
 
+        if (!isTeacherOrAdmin(req.user)) {
+            return res.status(403).json({ message: "Only teachers can export attendance" });
+        }
+        if (req.user.role !== "admin" && session.teacherId.toString() !== req.user.id) {
+            return res.status(403).json({ message: "You can only export your own sessions" });
+        }
+
         // 1. Get all students in the class
         const allStudents = await User.find({
             role: "student",
@@ -243,8 +291,10 @@ const exportSessionAttendance = async (req, res) => {
             const status = isPresent ? "Present" : "Absent";
             const time = isPresent ? new Date(isPresent).toLocaleTimeString() : "-";
             const safeName = `"${student.name.replace(/"/g, '""')}"`;
+            // Sanitize email to prevent CSV injection (prefix dangerous chars)
+            const safeEmail = student.email.replace(/^[=+@\-\t]/, "'$&");
 
-            csvContent += `${safeName},${student.email},${status},${time}\n`;
+            csvContent += `${safeName},${safeEmail},${status},${time}\n`;
         });
 
         res.header("Content-Type", "text/csv");

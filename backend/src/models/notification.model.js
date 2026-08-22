@@ -20,7 +20,7 @@ const notificationSchema = new mongoose.Schema({
         default: {}
     },
     relatedId: {
-        type: String
+        type: String // Polymorphic ref: stores Mark._id, Notice._id, etc. as string
     },
     isRead: {
         type: Boolean,

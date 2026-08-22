@@ -1,11 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../services/api';
 import { jwtDecode } from 'jwt-decode';
 import { Camera, CheckCircle, X, Loader2, ScanFace, RotateCcw, Send, AlertTriangle } from 'lucide-react';
 import { Card, PageHeader, Btn, Empty } from '../components/PageLayout';
 
-const API = 'http://localhost:5000/api/v1';
 const MIN = 5; const MAX = 15;
 const ACCENT = '#06b6d4';
 
@@ -19,26 +18,13 @@ export default function FaceRegister() {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [registered, setRegistered] = useState(false);
-    const [regData, setRegData] = useState(null);
     const [confirm, setConfirm] = useState(false);
 
     const getUserId = () => {
         try { const t = localStorage.getItem('token'); const d = jwtDecode(t); return d.userId || d.id || d._id; } catch { return null; }
     };
 
-    useEffect(() => {
-        checkStatus();
-        return () => stopCamera();
-    }, []);
-
-    const checkStatus = async () => {
-        const userId = getUserId(); if (!userId) return;
-        try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.get(`${API}/face-attendance/check/${userId}`, { headers: { Authorization: `Bearer ${tk}` } });
-            if (res.data.registered) { setRegistered(true); setRegData(res.data); setSuccess(`Face registered on ${new Date(res.data.lastUpdated || res.data.registeredAt).toLocaleDateString()}`); }
-        } catch { }
-    };
+    const stopCamera = () => { stream?.getTracks().forEach(t => t.stop()); setStream(null); };
 
     const startCamera = async () => {
         try {
@@ -48,7 +34,29 @@ export default function FaceRegister() {
         } catch { setError('Camera access denied. Please allow camera permissions.'); }
     };
 
-    const stopCamera = () => { stream?.getTracks().forEach(t => t.stop()); setStream(null); };
+    useEffect(() => {
+        const userId = getUserId();
+        if (!userId) return;
+        api.get(`/face-attendance/check/${userId}`)
+            .then(res => {
+                if (res.data.registered) {
+                    setRegistered(true);
+                    setSuccess(`Face registered on ${new Date(res.data.lastUpdated || res.data.registeredAt).toLocaleDateString()}`);
+                }
+            })
+            .catch(() => { /* not registered yet */ });
+        return () => stopCamera();
+        // stopCamera is a one-time cleanup helper; status check intentionally runs once
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const checkStatus = async () => {
+        const userId = getUserId(); if (!userId) return;
+        try {
+            const res = await api.get(`/face-attendance/check/${userId}`);
+            if (res.data.registered) { setRegistered(true); setSuccess(`Face registered on ${new Date(res.data.lastUpdated || res.data.registeredAt).toLocaleDateString()}`); }
+        } catch { /* not registered yet */ }
+    };
 
     const capture = () => {
         if (!videoRef.current || !canvasRef.current) return;
@@ -66,13 +74,15 @@ export default function FaceRegister() {
         if (registered && !confirm) { setConfirm(true); return; }
         setLoading(true); setError(''); setConfirm(false);
         try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.post(`${API}/face-attendance/register`, { images }, { headers: { Authorization: `Bearer ${tk}` } });
+            const res = await api.post('/face-attendance/register', { images });
             setSuccess(`${registered ? 'Updated' : 'Registered'}! ${res.data.imagesProcessed} images processed.`);
             setRegistered(true); stopCamera(); setImages([]);
             await checkStatus();
             setTimeout(() => navigate('/dashboard'), 3000);
-        } catch (e) { setError(e.response?.data?.message || e.response?.data?.error || 'Registration failed'); }
+        } catch (e) {
+            const d = e.response?.data;
+            setError(d?.details?.error || d?.message || d?.error || 'Registration failed');
+        }
         setLoading(false);
     };
 

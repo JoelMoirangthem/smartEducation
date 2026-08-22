@@ -1,25 +1,36 @@
-import { useRef, useMemo } from 'react';
+import { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { Points, PointMaterial } from '@react-three/drei';
 import * as THREE from 'three';
 import { useTheme } from '../context/ThemeContext';
 
+const ORB_LIST = Array.from({ length: 6 }, (_, i) => ({
+    id: i,
+    position: [
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 10 - 5
+    ],
+    scale: Math.random() * 1.5 + 0.5,
+    speed: Math.random() * 0.003 + 0.001,
+    phase: Math.random() * Math.PI * 2,
+    color: ['#6366f1', '#8b5cf6', '#a78bfa', '#4f46e5', '#7c3aed', '#06b6d4'][i]
+}));
+
+const STAR_POSITIONS = (() => {
+    const count = 3000;
+    const arr = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+        arr[i * 3] = (Math.random() - 0.5) * 80;
+        arr[i * 3 + 1] = (Math.random() - 0.5) * 80;
+        arr[i * 3 + 2] = (Math.random() - 0.5) * 80;
+    }
+    return arr;
+})();
+
 function FloatingOrbs() {
     const orbsRef = useRef([]);
-    const orbs = useMemo(() => {
-        return Array.from({ length: 6 }, (_, i) => ({
-            id: i,
-            position: [
-                (Math.random() - 0.5) * 20,
-                (Math.random() - 0.5) * 20,
-                (Math.random() - 0.5) * 10 - 5
-            ],
-            scale: Math.random() * 1.5 + 0.5,
-            speed: Math.random() * 0.003 + 0.001,
-            phase: Math.random() * Math.PI * 2,
-            color: ['#6366f1', '#8b5cf6', '#a78bfa', '#4f46e5', '#7c3aed', '#06b6d4'][i]
-        }));
-    }, []);
+    const orbs = ORB_LIST;
 
     useFrame((state) => {
         const t = state.clock.getElapsedTime();
@@ -60,16 +71,7 @@ function FloatingOrbs() {
 function StarField() {
     const starsRef = useRef();
 
-    const positions = useMemo(() => {
-        const count = 3000;
-        const arr = new Float32Array(count * 3);
-        for (let i = 0; i < count; i++) {
-            arr[i * 3] = (Math.random() - 0.5) * 80;
-            arr[i * 3 + 1] = (Math.random() - 0.5) * 80;
-            arr[i * 3 + 2] = (Math.random() - 0.5) * 80;
-        }
-        return arr;
-    }, []);
+    const positions = STAR_POSITIONS;
 
     useFrame((state) => {
         if (starsRef.current) {

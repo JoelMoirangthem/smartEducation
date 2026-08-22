@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { GraduationCap } from "lucide-react";
 import AuthLayout, { AuthField } from "../components/AuthLayout";
+import api from "../services/api";
 
 const LoginStudent = () => {
     const [email, setEmail] = useState("");
@@ -12,21 +13,12 @@ const LoginStudent = () => {
         e.preventDefault();
         setLoading(true); setError("");
         try {
-            const res = await fetch("http://localhost:5000/api/v1/auth/login", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, password, role: "student" }),
-            });
-            const data = await res.json();
-            if (res.ok) {
-                localStorage.setItem("token", data.token);
-                localStorage.setItem("user", JSON.stringify(data.user));
-                window.location.href = "/dashboard";
-            } else {
-                setError(data.message || "Login failed");
-            }
-        } catch {
-            setError("Network error. Please try again.");
+            const { data } = await api.post("/auth/login", { email, password, role: "student" });
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+            window.location.href = "/dashboard";
+        } catch (err) {
+            setError(err.response?.data?.message || "Login failed. Please try again.");
         } finally { setLoading(false); }
     };
 

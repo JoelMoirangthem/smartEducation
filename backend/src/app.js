@@ -15,15 +15,28 @@ if (!fs.existsSync(uploadDir)) {
 // Middleware
 app.use(express.json({ limit: '50mb' })); // Increased limit for base64 images
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// CORS: allow only configured origins (no wildcard + credentials)
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+
 app.use(cors({
-    origin: '*', // Allow all origins for development
+    origin: (origin, callback) => {
+        // Allow requests with no origin (curl, native apps, same-origin)
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Static files (for local note storage fallback)
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// NOTE: /uploads is intentionally NOT served statically — uploaded note files
+// are access-controlled and delivered via GET /api/v1/notes/download/:id
+// (see controllers/note.controller.js). Public static serving would bypass
+// that entire ACL.
 
 // Global Request Logger with Performance Tracking
 app.use((req, res, next) => {
@@ -43,7 +56,9 @@ app.get('/', (req, res) => {
 });
 app.get('/api/v1/health', (req, res) => {
     res.status(200).json({
-        message: "you are perfectly work"
-    })
-})
+        status: "healthy",
+        service: "EduSmart Backend",
+        timestamp: new Date().toISOString()
+    });
+});
 module.exports = app;

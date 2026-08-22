@@ -3,7 +3,7 @@ import axios from "axios";
 import { QRCodeSVG } from "qrcode.react";
 import { Html5Qrcode } from "html5-qrcode";
 import { jwtDecode } from "jwt-decode";
-import io from "socket.io-client";
+import { initializeSocket, disconnectSocket } from "../services/socket.service";
 import FingerprintJS from "@fingerprintjs/fingerprintjs";
 import {
     QrCode, Scan, Users, CheckCircle, AlertCircle, Camera,
@@ -11,7 +11,8 @@ import {
 } from "lucide-react";
 import { Card, PageHeader, Spinner, Btn, Select, Label, Empty, Badge } from "../components/PageLayout";
 
-const API = "http://localhost:5000/api/v1";
+import api from '../services/api';
+const API = api.defaults.baseURL;
 const ACCENT = "#34d399"; // green for attendance
 
 export default function Attendance() {
@@ -24,7 +25,6 @@ export default function Attendance() {
     const [studentStats, setStudentStats] = useState([]);
     const [scanResult, setScanResult] = useState(null);
     const [isScanning, setIsScanning] = useState(false);
-    const [cameraError, setCameraError] = useState(null);
     const [deviceId, setDeviceId] = useState(null);
     const [socketConnected, setSocketConnected] = useState(false);
     const scannerRef = useRef(null);
@@ -39,64 +39,58 @@ export default function Attendance() {
         if (!token) return;
         try {
             const decoded = jwtDecode(token);
-            setUser(decoded);
-            const socket = io("http://localhost:5000", { transports: ["websocket"], reconnectionAttempts: 5 });
+            const socket = initializeSocket(decoded.id, decoded.classId, decoded.role);
+            Promise.resolve().then(() => setUser(decoded));
             socket.on("connect", () => setSocketConnected(true));
             socket.on("disconnect", () => setSocketConnected(false));
 
             if (decoded.role === "teacher") {
-                fetchTeacherSubjects(token).then(subs => {
-                    fetchSessionStats(token, subs);
-                    if (subs && subs.length === 1) setSelectedSubjectId(subs[0]._id);
-                });
-                socket.emit("join_room", `class:${decoded.classId}`);
+                axios.get(`${API}/user/subjects`, { headers: { Authorization: `Bearer ${token}` } })
+                    .then(res => res.data || [])
+                    .then(subs => {
+                        setSubjects(subs);
+                        axios.get(`${API}/attendance/stats`, { headers: { Authorization: `Bearer ${token}` } })
+                            .then(res => {
+                                if (res.data.isActive) {
+                                    const sData = res.data;
+                                    const sub = subs.find(s => s._id === (sData.subjectId?._id || sData.subjectId));
+
+                                    setSession({
+                                        ...sData,
+                                        subjectName: sub?.name || 'Session Active',
+                                        className: sub?.classId ? `${sub.classId.name} | Section ${sub.classId.section}` : null
+                                    });
+                                    setStudentList((sData.students || []).map(r => ({
+                                        ...r,
+                                        timeLabel: new Date(r.markedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                    })));
+                                    setSelectedSubjectId(sData.subjectId?._id || sData.subjectId);
+                                }
+                            })
+                            .catch(() => { /* no active session */ });
+                        if (subs && subs.length === 1) setSelectedSubjectId(subs[0]._id);
+                    })
+                    .catch(error => console.error("[Frontend Debug] Failed to fetch subjects:", error));
+
                 socket.on("attendance_update", data => {
-                    setStudentList(prev => prev.some(s => s.studentId === data.studentId) ? prev : [data, ...prev]);
+                    setStudentList(prev => {
+                        const withTime = {
+                            ...data,
+                            timeLabel: new Date(data.markedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        };
+                        return prev.some(s => s.studentId === data.studentId) ? prev : [withTime, ...prev];
+                    });
                     setSession(prev => prev ? { ...prev, count: (prev.count || 0) + 1 } : prev);
                 });
             } else {
-                fetchStudentStats(token);
+                axios.get(`${API}/attendance/student-stats`, { headers: { Authorization: `Bearer ${token}` } })
+                    .then(res => setStudentStats(res.data || []))
+                    .catch(error => console.error("Failed to fetch student stats:", error));
             }
-            setLoading(false);
-            return () => socket.disconnect();
-        } catch (e) { setLoading(false); }
+            Promise.resolve().then(() => setLoading(false));
+            return () => { socket.off("attendance_update"); disconnectSocket(); };
+        } catch { Promise.resolve().then(() => setLoading(false)); }
     }, []);
-
-    const fetchTeacherSubjects = async (tk) => {
-        try {
-            const res = await axios.get(`${API}/user/subjects`, { headers: { Authorization: `Bearer ${tk}` } });
-            const data = res.data || [];
-            console.log(`[Frontend Debug] Fetched ${data.length} subjects for teacher`);
-            console.log(`[Frontend Debug] Subjects Data:`, data);
-            setSubjects(data);
-            return data;
-        } catch (error) {
-            console.error("[Frontend Debug] Failed to fetch subjects:", error);
-            return [];
-        }
-    };
-    const fetchStudentStats = async (tk) => {
-        const res = await axios.get(`${API}/attendance/student-stats`, { headers: { Authorization: `Bearer ${tk}` } });
-        setStudentStats(res.data || []);
-    };
-    const fetchSessionStats = async (tk, subsList = null) => {
-        try {
-            const res = await axios.get(`${API}/attendance/stats`, { headers: { Authorization: `Bearer ${tk}` } });
-            if (res.data.isActive) {
-                const sData = res.data;
-                const pool = subsList || subjects;
-                const sub = pool.find(s => s._id === (sData.subjectId?._id || sData.subjectId));
-
-                setSession({
-                    ...sData,
-                    subjectName: sub?.name || 'Session Active',
-                    className: sub?.classId ? `${sub.classId.name} | Section ${sub.classId.section}` : null
-                });
-                setStudentList(sData.students || []);
-                setSelectedSubjectId(sData.subjectId?._id || sData.subjectId);
-            }
-        } catch { }
-    };
 
     const startSession = async () => {
         if (!selectedSubjectId) return alert("Select a subject first");
@@ -122,7 +116,7 @@ export default function Attendance() {
             const tk = localStorage.getItem("token");
             await axios.post(`${API}/attendance/end`, {}, { headers: { Authorization: `Bearer ${tk}` } });
             setSession(null); setStudentList([]);
-        } catch (e) { alert("Failed to end session"); }
+        } catch { alert("Failed to end session"); }
         setLoading(false);
     };
 
@@ -140,15 +134,15 @@ export default function Attendance() {
     useEffect(() => () => { scannerRef.current?.stop().catch(() => { }); }, []);
 
     const handleCameraScan = async () => {
-        setIsScanning(true); setCameraError(null); setScanResult(null);
+        setIsScanning(true); setScanResult(null);
         try {
             const qr = new Html5Qrcode("reader"); scannerRef.current = qr;
             await qr.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } },
                 txt => { handleScanSuccess(txt); stopCamera(); }, () => { });
-        } catch { setCameraError("Camera access denied."); setIsScanning(false); }
+        } catch { setScanResult({ success: false, message: "Camera access denied." }); setIsScanning(false); }
     };
     const stopCamera = async () => {
-        if (scannerRef.current) { try { await scannerRef.current.stop(); scannerRef.current.clear(); } catch { } }
+        if (scannerRef.current) { try { await scannerRef.current.stop(); scannerRef.current.clear(); } catch { /* already stopped */ } }
         setIsScanning(false);
     };
     const handleFileUpload = async (e) => {
@@ -319,7 +313,7 @@ export default function Attendance() {
                                             <p style={{ fontSize: '0.75rem', color: 'var(--c-muted)', margin: 0, fontWeight: 500 }}>Successfully Authenticated</p>
                                         </div>
                                         <span style={{ fontSize: '0.8rem', color: 'var(--c-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <Clock size={14} />{new Date(r.markedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            <Clock size={14} />{r.timeLabel}
                                         </span>
                                     </div>
                                 ))

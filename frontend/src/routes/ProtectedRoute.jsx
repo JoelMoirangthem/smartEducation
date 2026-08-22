@@ -8,16 +8,24 @@ function ProtectedRoute({ allowedRoles }) {
         return <Navigate to="/" />;
     }
 
+    let outcome = null; // 'denied' | 'invalid'
     try {
         const decoded = jwtDecode(token);
         if (allowedRoles && !allowedRoles.includes(decoded.role)) {
             // Role not allowed, redirect to dashboard or home
-            return <Navigate to="/dashboard" replace />;
+            outcome = 'denied';
         }
     } catch (error) {
         console.error("Invalid token:", error);
         localStorage.removeItem("token");
+        outcome = 'invalid';
+    }
+
+    if (outcome === 'invalid') {
         return <Navigate to="/" />;
+    }
+    if (outcome === 'denied') {
+        return <Navigate to="/dashboard" replace />;
     }
 
     return <Outlet />;

@@ -1,68 +1,65 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { OpenAI } = require("openai");
 const Note = require("../models/note.model");
 const Mark = require("../models/mark.model");
 const User = require("../models/user.model");
 const ChatSession = require("../models/chatSession.model");
 
-// Initialize Clients
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-let openai = null;
-if (process.env.OPENAI_API_KEY) {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// ================= AI PROVIDER CHAIN: NVIDIA (primary) → Sarvam (fallback) =================
+if (!process.env.NVIDIA_API_KEY && !process.env.SARVAM_API_KEY) {
+    console.warn("⚠️  No AI API keys set (NVIDIA_API_KEY / SARVAM_API_KEY) — AI tutor features will be disabled.");
 }
+const nvidiaClient = new OpenAI({
+    baseURL: process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1",
+    apiKey: process.env.NVIDIA_API_KEY || ""
+});
+const sarvamClient = new OpenAI({
+    baseURL: process.env.SARVAM_BASE_URL || "https://api.sarvam.ai/v1",
+    apiKey: process.env.SARVAM_API_KEY || ""
+});
 
-const GEMINI_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
-    "gemini-2.0-flash-lite-preview-02-05" // Latest preview
+const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "openai/gpt-oss-120b";
+const ASSISTANT_MODEL = process.env.ASSISTANT_MODEL || "sarvam-105b-conversations";
+
+// Provider chain: Sarvam (fast) → NVIDIA (reasoning fallback)
+const PROVIDERS = [
+    { name: "Sarvam", client: sarvamClient, model: ASSISTANT_MODEL, enabled: !!process.env.SARVAM_API_KEY, maxTokens: 4096 },
+    { name: "NVIDIA", client: nvidiaClient, model: NVIDIA_MODEL, enabled: !!process.env.NVIDIA_API_KEY, maxTokens: 8192 }
 ];
+const SYS_PROMPT = "You are EduSmart AI, a helpful, concise, and professional academic assistant for students and teachers in an education platform.";
 
-// Simplified Model Getter
-const getSpecificModel = (name) => {
-    return genAI.getGenerativeModel({ model: name });
-};
+// ================= UNIFIED NON-STREAMING LLM CALL (NVIDIA → Sarvam) =================
+const unifiedLLMCall = async ({ prompt, isJson = false }) => {
+    const messages = [
+        {
+            role: "system",
+            content: SYS_PROMPT + (isJson ? "\nImportant: Respond strictly in valid JSON with no markdown code blocks or conversational prefixes." : "")
+        },
+        { role: "user", content: prompt }
+    ];
 
-// ================= UNIFIED AI ENGINE =================
-const unifiedGeminiCall = async (operation, options = {}) => {
-    const { isJson = false, prompt = "" } = options;
-    let lastError = "";
-
-    // 1. Try Gemini Models
-    for (const modelName of GEMINI_MODELS) {
+    let lastError;
+    for (const provider of PROVIDERS) {
+        if (!provider.enabled) continue;
         try {
-            console.log(`>>> [AI ENGINE] Trying Gemini: ${modelName}`);
-            const model = getSpecificModel(modelName);
-            const result = await operation(model);
-            if (result) return result;
-        } catch (err) {
-            const errMsg = err.message || "Unknown error";
-            console.warn(`>>> [AI ENGINE] Gemini ${modelName} failed:`, errMsg);
-            lastError = errMsg;
-
-            // If it's a quota issue (429), it's likely similar across all models for this key, 
-            // but we'll try others just in case one has a separate quota.
-            continue;
-        }
-    }
-
-    // 2. Try OpenAI Fallback (if configured)
-    if (openai && prompt) {
-        try {
-            console.log(">>> [AI ENGINE] Trying OpenAI Fallback (GPT-4o-mini)");
-            const completion = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: prompt }],
-                response_format: isJson ? { type: "json_object" } : undefined
+            const completion = await provider.client.chat.completions.create({
+                model: provider.model,
+                messages,
+                temperature: 0.6,
+                top_p: 0.7,
+                max_tokens: provider.maxTokens || 4096,
+                stream: false
             });
-            return completion.choices[0].message.content;
-        } catch (oaError) {
-            console.error(">>> [AI ENGINE] OpenAI Fallback also failed:", oaError.message);
+
+            const content = completion.choices?.[0]?.message?.content || "";
+            if (!content) throw new Error("Empty response from AI model");
+            return content;
+        } catch (err) {
+            console.warn(`>>> [AI ENGINE] ${provider.name} call failed (${err.message}), trying next provider...`);
+            lastError = err;
         }
     }
-
-    throw new Error(`AI Engine exhausted all models. Last Error: ${lastError}`);
+    console.error(">>> [AI ENGINE] All providers failed:", lastError?.message);
+    throw lastError || new Error("No AI providers available");
 };
 
 /**
@@ -71,17 +68,42 @@ const unifiedGeminiCall = async (operation, options = {}) => {
 const safeParseJson = (text) => {
     if (!text) return null;
     try {
-        const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
+        const clean = text.replace(/```json/gi, "").replace(/```/g, "").trim();
         return JSON.parse(clean);
     } catch (e) {
         console.error("JSON Parse Error on text:", text.substring(0, 100));
-        // Fallback for analysis - try to extract object from text if possible
+        const arrMatch = text.match(/\[\s*\{[\s\S]*\}\s*\]/);
+        if (arrMatch) {
+            try { return JSON.parse(arrMatch[0]); } catch (e2) {}
+        }
         const match = text.match(/\{[\s\S]*\}/);
         if (match) {
-            try { return JSON.parse(match[0]); } catch (e2) { return null; }
+            try { return JSON.parse(match[0]); } catch (e3) {}
         }
         return null;
     }
+};
+
+// Access check for using a note's content in AI features (mirrors the
+// downloadNote ACL: admin / uploader / same-class student / assigned teacher)
+const canUseNoteForAI = async (user, note) => {
+    if (!note) return false;
+    if (user.role === "admin") return true;
+    if (String(note.uploadedBy) === String(user.id)) return true;
+    if (user.role === "student") {
+        return !!(user.classId && note.classId && String(note.classId) === String(user.classId));
+    }
+    if (user.role === "teacher") {
+        const teacher = await User.findById(user.id).select("managedClassIds classId assignedSubjectIds").lean();
+        if (!teacher) return false;
+        const classIds = [
+            ...(teacher.managedClassIds || []).map(String),
+            ...(teacher.classId ? [String(teacher.classId)] : [])
+        ];
+        if (note.classId && classIds.includes(String(note.classId))) return true;
+        return (teacher.assignedSubjectIds || []).some(s => String(s) === String(note.subjectId));
+    }
+    return false;
 };
 
 // ================= AI TUTOR: EXPLAIN CONTENT =================
@@ -92,6 +114,9 @@ const explainContent = async (req, res) => {
 
         if (noteId) {
             const note = await Note.findById(noteId);
+            if (!(await canUseNoteForAI(req.user, note))) {
+                return res.status(403).json({ message: "You do not have access to this note" });
+            }
             if (note && note.content) contentToExplain = note.content;
         }
 
@@ -99,10 +124,7 @@ const explainContent = async (req, res) => {
 
         const prompt = `Act as an expert tutor. Explain the following concept in simple, easy-to-understand terms for a student. Use analogies if possible. \n\nContent: ${contentToExplain}`;
 
-        const explanation = await unifiedGeminiCall(async (model) => {
-            const result = await model.generateContent(prompt);
-            return result.response.text();
-        }, { prompt });
+        const explanation = await unifiedLLMCall({ prompt });
 
         res.json({ explanation });
     } catch (error) {
@@ -119,6 +141,9 @@ const generateQuiz = async (req, res) => {
 
         if (noteId) {
             const note = await Note.findById(noteId);
+            if (!(await canUseNoteForAI(req.user, note))) {
+                return res.status(403).json({ message: "You do not have access to this note" });
+            }
             if (note && note.content) contentToQuiz = note.content;
         }
 
@@ -126,10 +151,7 @@ const generateQuiz = async (req, res) => {
 
         const prompt = `Generate a JSON array of 5 multiple-choice questions based on the following content. Each object in the array should have 'question', 'options' (array of 4 strings), and 'correctAnswer' (string, matching one option). Just return the raw JSON array. \n\nContent: ${contentToQuiz}`;
 
-        const quizText = await unifiedGeminiCall(async (model) => {
-            const result = await model.generateContent(prompt);
-            return result.response.text();
-        }, { prompt, isJson: true });
+        const quizText = await unifiedLLMCall({ prompt, isJson: true });
 
         const quiz = safeParseJson(quizText);
         if (!quiz) throw new Error("Failed to parse quiz JSON");
@@ -143,7 +165,6 @@ const generateQuiz = async (req, res) => {
 
 // ================= RULE-BASED FALLBACK: ANALYZE PERFORMANCE =================
 const ruleBasedAnalysis = (marks, studentName) => {
-    // Calculate subject stats
     const stats = {};
     marks.forEach(m => {
         const subName = m.subjectId?.name || "Unknown";
@@ -158,10 +179,9 @@ const ruleBasedAnalysis = (marks, studentName) => {
         score: Math.round(stats[sub].total / stats[sub].count)
     }));
 
-    // Sort to find strengths/weaknesses
     const sorted = [...graphData].sort((a, b) => b.score - a.score);
-    const top = sorted[0];
-    const bottom = sorted[sorted.length - 1];
+    const top = sorted[0] || { subject: "General", score: 0 };
+    const bottom = sorted[sorted.length - 1] || { subject: "General", score: 0 };
 
     const highlights = [];
     if (top.score >= 80) highlights.push(`🌟 Excelled in ${top.subject}`);
@@ -169,7 +189,6 @@ const ruleBasedAnalysis = (marks, studentName) => {
     highlights.push(`📊 Consistent efforts in ${graphData.length} subjects`);
     if (graphData.every(s => s.score > 60)) highlights.push(`✅ Solid performance across all subjects`);
 
-    // Calculate trend data (avg by date)
     const trendMap = {};
     marks.forEach(m => {
         const date = new Date(m.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -182,6 +201,17 @@ const ruleBasedAnalysis = (marks, studentName) => {
         date,
         score: Math.round(trendMap[date].total / trendMap[date].count)
     })).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    if (graphData.length === 0) {
+        return {
+            summary: "No mark data available yet.",
+            analysis: "Not enough data to analyze performance.",
+            graphData: [],
+            trendData: [],
+            highlights: [],
+            isFallback: true
+        };
+    }
 
     let analysis = `### 📊 Statistical Performance Analysis for ${studentName}\n\n`;
     analysis += `Based on your recent marks, you've shown strong performance in **${top.subject}** with an average of ${top.score}%. \n\n`;
@@ -214,6 +244,35 @@ const analyzePerformance = async (req, res) => {
 
         if (!userId) return res.status(400).json({ message: "Student ID required" });
 
+        // Authorization: teachers may only analyze students they teach
+        // (student's class in their managed classes, or the requested subject
+        // belongs to the student's class and the teacher teaches it)
+        if (!["student", "admin"].includes(req.user.role)) {
+            const [student, teacher] = await Promise.all([
+                User.findById(userId).select("classId role").lean(),
+                User.findById(req.user.id).select("managedClassIds classId assignedSubjectIds").lean()
+            ]);
+            if (!student || student.role !== "student") {
+                return res.status(404).json({ message: "Student not found" });
+            }
+            const classIds = new Set([
+                ...((teacher?.managedClassIds || []).map(String)),
+                ...(teacher?.classId ? [String(teacher.classId)] : [])
+            ]);
+            let authorized = !!(student.classId && classIds.has(String(student.classId)));
+            if (!authorized && subjectId && student.classId) {
+                const Subject = require("../models/subject.model");
+                authorized = !!(await Subject.findOne({
+                    _id: subjectId, classId: student.classId, teachers: req.user.id
+                }));
+            }
+            if (!authorized) {
+                return res.status(403).json({
+                    message: "You are not authorized to view this student's performance"
+                });
+            }
+        }
+
         let query = { studentId: userId };
         if (subjectId) query.subjectId = subjectId;
 
@@ -230,7 +289,7 @@ const analyzePerformance = async (req, res) => {
             });
         }
 
-        studentName = marks[0].studentId.name;
+        studentName = marks[0].studentId?.name || "Student";
         const marksSummary = marks.map(m => {
             const subject = m.subjectId?.name || "Unknown Subject";
             return `${subject} (${m.examType}): ${m.marksObtained}/${m.maxMarks}`;
@@ -249,10 +308,7 @@ Marks:
 ${marksSummary}`;
 
         try {
-            const analysisText = await unifiedGeminiCall(async (model) => {
-                const result = await model.generateContent(prompt);
-                return result.response.text();
-            }, { prompt, isJson: true });
+            const analysisText = await unifiedLLMCall({ prompt, isJson: true });
 
             const analysisData = safeParseJson(analysisText);
             if (!analysisData) throw new Error("Failed to parse analysis JSON");
@@ -265,89 +321,20 @@ ${marksSummary}`;
         }
     } catch (error) {
         console.error("AI Analyze Error:", error);
-        // Even if DB fails or something else, try to send a friendly message
         res.status(500).json({ message: "AI Engine is temporarily unavailable.", error: error.message });
     }
 };
 
-// ================= AI CHAT ASSISTANT =================
-const chatWithAI = async (req, res) => {
-    try {
-        const { message, history } = req.body;
-        if (!message) return res.status(400).json({ message: "Message is required" });
-
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.setHeader('Transfer-Encoding', 'chunked');
-
-        let accumulated = "";
-
-        try {
-            await unifiedGeminiCall(async (model) => {
-                let chatHistory = (history || []).map(msg => ({
-                    role: msg.role === 'client' ? 'user' : (msg.role === 'model' ? 'model' : 'user'),
-                    parts: [{ text: msg.parts[0].text }]
-                }));
-
-                const sysMessages = [
-                    { role: "user", parts: [{ text: "You are EduSmart AI. Be helpful, concise, and professional." }] },
-                    { role: "model", parts: [{ text: "Understood. I am EduSmart AI, ready to assist." }] }
-                ];
-
-                const chat = model.startChat({
-                    history: [...sysMessages, ...chatHistory].filter((v, i, a) => !(i > 0 && v.role === 'model' && a[i - 1].role === 'model')),
-                    generationConfig: { maxOutputTokens: 2000 },
-                });
-
-                const result = await chat.sendMessageStream(message);
-                for await (const chunk of result.stream) {
-                    const chunkText = chunk.text();
-                    accumulated += chunkText;
-                    res.write(chunkText);
-                }
-                return true;
-            }, { prompt: message });
-        } catch (allAiError) {
-            console.warn("AI Engine Exhausted:", allAiError.message);
-            const demoResponse = `### 🚀 EduSmart AI (Maintenance Mode)\n\nIt looks like our AI services are currently heavily loaded or quotas have been reached. \n\n**To continue your studies:**\n- Please try again in a short while.\n- You can still access your attendance, marks, and notes.\n\n*Thank you for your patience, student!*`;
-            accumulated = demoResponse;
-            const words = demoResponse.split(" ");
-            for (const word of words) {
-                res.write(word + " ");
-                await new Promise(r => setTimeout(r, 20));
-            }
-        }
-
-        // Save session logic...
-        if (accumulated.trim()) {
-            const { sessionId } = req.body;
-            try {
-                if (sessionId) {
-                    await ChatSession.findByIdAndUpdate(sessionId, {
-                        $push: { messages: { $each: [{ role: "user", content: message }, { role: "model", content: accumulated }] } }
-                    });
-                } else {
-                    const title = message.length > 40 ? message.substring(0, 37) + "..." : message;
-                    const newSession = new ChatSession({
-                        user: req.user.id,
-                        title,
-                        messages: [{ role: "user", content: message }, { role: "model", content: accumulated }]
-                    });
-                    const saved = await newSession.save();
-                    res.write(`\n\n[SESSION_ID:${saved._id}]`);
-                }
-            } catch (dbErr) { console.error("Session Save Error:", dbErr); }
-        }
-        res.end();
-    } catch (error) {
-        console.error("Critical AI Error:", error);
-        if (!res.headersSent) res.status(500).json({ message: "AI Error", error: error.message });
-        else res.end();
-    }
-};
+// ================= AI CHAT ASSISTANT (TUTOR STREAMING) =================
+// Moved to the Python agent service (/api/v1/ai/chat — agent-py/tutor.py).
+// Node keeps explain/quiz/analyze and session CRUD only.
 
 const getChatSessions = async (req, res) => {
     try {
-        const sessions = await ChatSession.find({ user: req.user.id }).select("title updatedAt").sort({ updatedAt: -1 });
+        const { mode } = req.query;
+        const query = { user: req.user.id };
+        if (mode) query.mode = mode;
+        const sessions = await ChatSession.find(query).select("title updatedAt mode").sort({ updatedAt: -1 });
         res.json(sessions);
     } catch (error) { res.status(500).json({ message: "Failed to fetch sessions" }); }
 };
@@ -371,7 +358,6 @@ module.exports = {
     explainContent,
     generateQuiz,
     analyzePerformance,
-    chatWithAI,
     getChatSessions,
     getChatSessionById,
     deleteChatSession

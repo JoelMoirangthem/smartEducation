@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import axios from "axios";
+import api from "../services/api";
 import {
     Bell,
     Check,
@@ -15,8 +15,6 @@ import {
 } from "lucide-react";
 import { initializeSocket } from "../services/socket.service";
 import { jwtDecode } from "jwt-decode";
-
-const API = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const Notifications = () => {
     const [notifications, setNotifications] = useState([]);
@@ -35,7 +33,7 @@ const Notifications = () => {
             userId = decoded.id;
             userRole = decoded.role;
             classId = decoded.classId;
-        } catch (error) {
+        } catch {
             console.error("Invalid token");
         }
     }
@@ -53,7 +51,12 @@ const Notifications = () => {
 
     useEffect(() => {
         if (token && userId) {
-            fetchNotifications();
+            api.get('/notifications').then(res => {
+                if (Array.isArray(res.data)) {
+                    setNotifications(res.data);
+                    setUnreadCount(res.data.filter(n => !n.isRead).length);
+                }
+            }).catch(error => console.error("Error fetching notifications", error));
 
             const socket = initializeSocket(userId, classId, userRole);
             if (socket) {
@@ -74,30 +77,14 @@ const Notifications = () => {
                 return () => socket.off("new_notification", handleNewNotification);
             }
         }
-    }, [userId]);
-
-    const fetchNotifications = async () => {
-        try {
-            const res = await axios.get(`${API}/v1/notifications`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            if (Array.isArray(res.data)) {
-                setNotifications(res.data);
-                setUnreadCount(res.data.filter(n => !n.isRead).length);
-            }
-        } catch (error) {
-            console.error("Error fetching notifications", error);
-        }
-    };
+    }, [classId, token, userId, userRole]);
 
     const markAsRead = async (id) => {
         try {
-            await axios.put(`${API}/v1/notifications/${id}/read`, {}, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            await api.put(`/notifications/${id}/read`);
             setNotifications(prev => prev.map(n => n._id === id ? { ...n, isRead: true } : n));
             setUnreadCount(prev => Math.max(0, prev - 1));
-        } catch (error) {
+        } catch {
             console.error("Error marking read");
         }
     };
@@ -105,23 +92,19 @@ const Notifications = () => {
     const markAllAsRead = async () => {
         if (unreadCount === 0) return;
         try {
-            await axios.put(`${API}/v1/notifications/read-all`, {}, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            await api.put('/notifications/read-all');
             setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
             setUnreadCount(0);
-        } catch (error) {
+        } catch {
             console.error("Error marking all as read");
         }
     };
 
     const clearRead = async () => {
         try {
-            await axios.delete(`${API}/v1/notifications/read`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            await api.delete('/notifications/read-cleared');
             setNotifications(prev => prev.filter(n => !n.isRead));
-        } catch (error) {
+        } catch {
             console.error("Error clearing read");
         }
     };

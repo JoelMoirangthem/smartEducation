@@ -7,7 +7,6 @@ const authMiddleware = require('../middlewares/auth.middleware');
 router.use(authMiddleware);
 
 // Create notice (teachers/admin only)
-router.post('/create', noticeController.createNotice);
 router.post('/add', noticeController.createNotice);
 
 // Get all notices (filtered by user role/class)

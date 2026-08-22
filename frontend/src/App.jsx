@@ -5,8 +5,6 @@ import LoginRoleSelection from "./pages/LoginRoleSelection";
 import LoginTeacher from "./pages/LoginTeacher";
 import LoginStudent from "./pages/LoginStudent";
 import LoginAdmin from "./pages/LoginAdmin";
-import RegisterTeacher from "./pages/RegisterTeacher";
-import RegisterStudent from "./pages/RegisterStudent";
 import RegisterAdmin from "./pages/RegisterAdmin";
 import Dashboard from "./pages/Dashboard";
 import Profile from "./pages/Profile";
@@ -52,8 +50,6 @@ function App() {
             <Route path="login/teacher" element={<LoginTeacher />} />
             <Route path="login/student" element={<LoginStudent />} />
             <Route path="login/admin" element={<LoginAdmin />} />
-            <Route path="register/teacher" element={<RegisterTeacher />} />
-            <Route path="register/student" element={<RegisterStudent />} />
             <Route path="register/admin" element={<RegisterAdmin />} />
           </Route>
 

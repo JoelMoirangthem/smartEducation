@@ -1,39 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import {
-    Plus, Trash2, Book, Layers, ChevronDown, ChevronUp,
-    Check, ChevronRight, Loader2, BookOpen, Layout,
-    GraduationCap, Calendar, Zap, MoreHorizontal
-} from 'lucide-react';
+import { Plus, Trash2, ChevronDown, Check, ChevronRight, Loader2, BookOpen, Layers } from 'lucide-react';
 import { toast } from 'react-toastify';
-import { getSocket } from '../../services/socket.service';
-import { Card, PageHeader, Spinner, Btn, Label, Input, Select, SectionTitle, Empty, Badge } from '../../components/PageLayout';
-
-const API = 'http://localhost:5000/api/v1/admin';
+import api from '../../services/api';
+const API = api.defaults.baseURL;
 const ACCENT = '#10b981';
 
-/* --- Premium Subject Item --- */
-const SubjectPill = ({ subject, onDelete, onEdit, accent }) => (
-    <div style={{
-        padding: '12px 16px', borderRadius: 16, background: 'var(--c-surface-hover)',
-        border: '1px solid var(--c-border)', position: 'relative',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        transition: 'all 0.2s'
-    }} onMouseEnter={e => { e.currentTarget.style.background = 'var(--c-surface)'; e.currentTarget.style.borderColor = accent + '30'; }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 32, height: 32, borderRadius: 10, background: accent + '10', display: 'flex', alignItems: 'center', justifyContent: 'center', color: accent }}>
-                <BookOpen size={16} />
-            </div>
-            <div>
-                <p style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--c-text)', margin: 0 }}>{subject.name}</p>
-                <p style={{ fontSize: '0.65rem', color: 'var(--c-muted)', margin: 0, fontFamily: 'Space Grotesk, sans-serif' }}>{subject.code}</p>
-            </div>
-        </div>
-        <button onClick={() => onDelete(subject._id)} style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.15)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171' }}>
-            <Trash2 size={12} />
-        </button>
-    </div>
-);
+const inputStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, background: 'var(--c-input-bg)', border: '1px solid var(--c-border)', color: 'var(--c-text)', fontSize: '0.85rem', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' };
 
 export default function ManageAcademic() {
     const [step, setStep] = useState(1);
@@ -48,52 +21,35 @@ export default function ManageAcademic() {
     const [editingSub, setEditingSub] = useState(null);
     const [yearDropdown, setYearDropdown] = useState(false);
     const [saving, setSaving] = useState(false);
-
     const token = localStorage.getItem('token');
     const currentYear = new Date().getFullYear();
-    const years = Array.from({ length: 15 }, (_, i) => ({ _id: `${currentYear + i}`, name: `${currentYear + i}` }));
+    const years = Array.from({ length: 5 }, (_, i) => ({ _id: `${currentYear + i}`, name: `${currentYear + i}` }));
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         setLoading(true);
         try {
             const [cRes, sRes] = await Promise.all([
-                axios.get(`${API}/classes`, { headers: { Authorization: `Bearer ${token}` } }),
-                axios.get(`${API}/subjects`, { headers: { Authorization: `Bearer ${token}` } }),
+                api.get('/admin/classes'), api.get('/admin/subjects'),
             ]);
             setClasses(cRes.data.classes || []);
             setSubjects(sRes.data.subjects || []);
-        } catch { toast.error('Shielded data access failed'); }
+        } catch { toast.error('Failed to load data'); }
         setLoading(false);
-    };
-
-    useEffect(() => {
-        fetchData();
-        const socket = getSocket();
-        if (socket) {
-            const h = () => fetchData();
-            ['CLASS_CREATED', 'CLASS_DELETED', 'SUBJECT_CREATED', 'SUBJECT_UPDATED', 'SUBJECT_DELETED'].forEach(e => socket.on(e, h));
-            return () => ['CLASS_CREATED', 'CLASS_DELETED', 'SUBJECT_CREATED', 'SUBJECT_UPDATED', 'SUBJECT_DELETED'].forEach(e => socket.off(e, h));
-        }
     }, []);
+
+    useEffect(() => { fetchData(); }, [fetchData]);
 
     const createClass = async (e) => {
         e.preventDefault();
-        if (!newClass.academicYearId) { toast.error('Please select an active session'); return; }
+        if (!newClass.academicYearId) { toast.error('Select a year'); return; }
         setSaving(true);
         try {
             const selYear = years.find(y => y._id === newClass.academicYearId);
-            const ayRes = await axios.post(`${API}/academic-years`, {
-                name: selYear.name,
-                startDate: new Date(`${selYear.name}-01-01`),
-                endDate: new Date(`${selYear.name}-12-31`),
-                isCurrent: true
-            }, { headers: { Authorization: `Bearer ${token}` } });
-            const ayId = ayRes.data.academicYear._id;
-            const res = await axios.post(`${API}/classes`, { ...newClass, academicYearId: ayId }, { headers: { Authorization: `Bearer ${token}` } });
+            const ayRes = await api.post('/admin/academic-years', { name: selYear.name, startDate: new Date(`${selYear.name}-01-01`), endDate: new Date(`${selYear.name}-12-31`), isCurrent: true });
+            const res = await api.post('/admin/classes', { ...newClass, academicYearId: ayRes.data.academicYear._id });
             setCreatedClass(res.data.class); setStep(2);
-            toast.success('Sector defined. Add curriculum units.');
-            fetchData();
-        } catch (e) { toast.error(e.response?.data?.message || 'Sector definition failed'); }
+            toast.success('Class created'); fetchData();
+        } catch (e) { toast.error(e.response?.data?.message || 'Failed'); }
         setSaving(false);
     };
 
@@ -101,226 +57,174 @@ export default function ManageAcademic() {
         e.preventDefault(); setSaving(true);
         try {
             if (editingSub) {
-                const res = await axios.put(`${API}/subjects/${editingSub._id}`, newSubject, { headers: { Authorization: `Bearer ${token}` } });
+                const res = await api.put(`/admin/subjects/${editingSub._id}`, newSubject);
                 setAddedSubjects(p => p.map(s => s._id === editingSub._id ? res.data.subject : s));
-                toast.success('Curriculum unit updated'); setEditingSub(null);
+                toast.success('Subject updated'); setEditingSub(null);
             } else {
-                const res = await axios.post(`${API}/subjects`, { ...newSubject, classId: createdClass._id }, { headers: { Authorization: `Bearer ${token}` } });
+                const res = await api.post('/admin/subjects', { ...newSubject, classId: createdClass._id });
                 setAddedSubjects(p => [...p, res.data.subject]);
-                toast.success(`Unit added to ${createdClass.name}`);
+                toast.success('Subject added');
             }
             setNewSubject({ name: '', code: '', teacherId: '' });
-        } catch (e) { toast.error(e.response?.data?.message || 'Unit sync failed'); }
+        } catch (e) { toast.error(e.response?.data?.message || 'Failed'); }
         setSaving(false);
     };
 
     const deleteSubject = async (id) => {
-        if (!confirm('Purge this unit from database?')) return;
-        try {
-            await axios.delete(`${API}/subjects/${id}`, { headers: { Authorization: `Bearer ${token}` } });
-            setAddedSubjects(p => p.filter(s => s._id !== id)); toast.info('Unit purged');
-            fetchData();
-        } catch { toast.error('Purge sequence failed'); }
+        if (!confirm('Delete this subject?')) return;
+        try { await api.delete(`/admin/subjects/${id}`); setAddedSubjects(p => p.filter(s => s._id !== id)); fetchData(); toast.info('Deleted'); } catch { toast.error('Failed'); }
     };
 
     const deleteClass = async (id) => {
-        if (!confirm('Wipe this entire class sector?')) return;
-        try { await axios.delete(`${API}/classes/${id}`, { headers: { Authorization: `Bearer ${token}` } }); fetchData(); toast.info('Sector wiped'); }
-        catch { toast.error('Wipe sequence failed'); }
+        if (!confirm('Delete this class and all its subjects?')) return;
+        try { await api.delete(`/admin/classes/${id}`); fetchData(); toast.info('Deleted'); } catch { toast.error('Failed'); }
     };
 
-    const finish = () => { setStep(1); setNewClass({ name: '', code: '', academicYearId: '' }); setAddedSubjects([]); setCreatedClass(null); fetchData(); };
-    const openForClass = (cls) => { setCreatedClass(cls); setStep(2); setAddedSubjects(subjects.filter(s => s.classId?._id === cls._id)); };
-
-    if (loading) return <Spinner label="Calibrating academic registry…" />;
+    if (loading) return <div style={{ display: 'flex', justifyContent: 'center', padding: 60, color: 'var(--c-muted)' }}><Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} /></div>;
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 32, paddingBottom: 60 }}>
-            <PageHeader
-                title="Academic Architect"
-                subtitle="Design and deploy your institution's structural sectors"
-                accent={ACCENT}
-                icon={Layout}
-                right={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--c-surface-hover)', padding: '6px 16px', borderRadius: 20, border: '1px solid var(--c-border)' }}>
-                        {[{ n: 1, label: 'Sector Definition' }, { n: 2, label: 'Curriculum Load' }].map((s, i) => (
-                            <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                {i > 0 && <ChevronRight size={16} color="var(--c-muted)" />}
-                                <div style={{
-                                    width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    fontWeight: 800, fontSize: '0.8rem',
-                                    background: step > s.n ? '#10b98120' : step === s.n ? ACCENT : 'var(--c-bg)',
-                                    color: step >= s.n ? 'white' : 'var(--c-muted)',
-                                    border: `1px solid ${step === s.n ? ACCENT : 'var(--c-border)'}`, transition: 'all 0.3s'
-                                }}>{step > s.n ? <Check size={16} color="#10b981" /> : s.n}</div>
-                                <span style={{ fontSize: '0.75rem', color: step === s.n ? 'var(--c-text)' : 'var(--c-muted)', fontWeight: step === s.n ? 700 : 500 }}>{s.label}</span>
-                            </div>
-                        ))}
-                    </div>
-                }
-            />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                <div>
+                    <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--c-text)', margin: 0 }}>Academic Setup</h1>
+                    <p style={{ color: 'var(--c-muted)', fontSize: '0.85rem', marginTop: 2 }}>Manage classes and subjects</p>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--c-surface)', padding: '4px 12px', borderRadius: 8, border: '1px solid var(--c-border)' }}>
+                    {[{ n: 1, label: 'Classes' }, { n: 2, label: 'Subjects' }].map((s, i) => (
+                        <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {i > 0 && <ChevronRight size={12} color="var(--c-muted)" />}
+                            <div style={{
+                                width: 24, height: 24, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontWeight: 700, fontSize: '0.7rem',
+                                background: step > s.n ? '#10b98120' : step === s.n ? ACCENT : 'var(--c-bg)',
+                                color: step >= s.n ? 'white' : 'var(--c-muted)',
+                            }}>{step > s.n ? <Check size={12} color="#10b981" /> : s.n}</div>
+                            <span style={{ fontSize: '0.75rem', color: step === s.n ? 'var(--c-text)' : 'var(--c-muted)', fontWeight: step === s.n ? 600 : 500 }}>{s.label}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 32, alignItems: 'start' }}>
-
-                {/* Architect Panel */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <Zap size={20} color={ACCENT} />
-                        <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--c-text)', margin: 0, fontFamily: 'Space Grotesk, sans-serif' }}>Forge Panel</h3>
-                    </div>
-
-                    {step === 1 && (
-                        <Card accent={ACCENT} style={{ padding: 32 }}>
-                            <SectionTitle>Primary Class Sector</SectionTitle>
-                            <form onSubmit={createClass} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                                <div><Label>Designation Name</Label><Input accent={ACCENT} value={newClass.name} onChange={e => setNewClass(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Science Ops 10-A" required /></div>
-                                <div><Label>System Code</Label><Input accent={ACCENT} value={newClass.code} onChange={e => setNewClass(p => ({ ...p, code: e.target.value.toUpperCase() }))} placeholder="e.g. SC-10A" required /></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 20, alignItems: 'start' }}>
+                {/* Create Form */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {step === 1 ? (
+                        <div style={{ padding: '20px', borderRadius: 14, background: 'var(--c-card-bg)', border: '1px solid var(--c-border)' }}>
+                            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: '0 0 16px', color: 'var(--c-text)' }}>Create Class</h3>
+                            <form onSubmit={createClass} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                <div>
+                                    <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Name</label>
+                                    <input value={newClass.name} onChange={e => setNewClass(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Class 10-A" required style={{ ...inputStyle, marginTop: 4 }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Code</label>
+                                    <input value={newClass.code} onChange={e => setNewClass(p => ({ ...p, code: e.target.value.toUpperCase() }))} placeholder="e.g. CLS-10A" required style={{ ...inputStyle, marginTop: 4 }} />
+                                </div>
                                 <div style={{ position: 'relative' }}>
-                                    <Label>Operational Cycle</Label>
-                                    <div onClick={() => setYearDropdown(t => !t)} style={{ padding: '12px 16px', borderRadius: 14, background: 'var(--c-bg)', border: '1px solid var(--c-border)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: newClass.academicYearId ? 'var(--c-text)' : 'var(--c-muted)', fontSize: '0.9rem', transition: 'all 0.2s' }}>
-                                        {newClass.academicYearId ? years.find(y => y._id === newClass.academicYearId)?.name : 'Select Cycle'}
-                                        <ChevronDown size={18} color="var(--c-muted)" style={{ transform: yearDropdown ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }} />
+                                    <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Academic Year</label>
+                                    <div onClick={() => setYearDropdown(t => !t)} style={{ ...inputStyle, marginTop: 4, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        {newClass.academicYearId ? years.find(y => y._id === newClass.academicYearId)?.name : 'Select year'}
+                                        <ChevronDown size={14} color="var(--c-muted)" style={{ transform: yearDropdown ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }} />
                                     </div>
                                     {yearDropdown && (
-                                        <div style={{ position: 'absolute', zIndex: 100, width: '100%', background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', borderRadius: 14, marginTop: 8, maxHeight: 220, overflowY: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.15)', padding: 6 }}>
+                                        <div style={{ position: 'absolute', zIndex: 100, width: '100%', background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', borderRadius: 8, marginTop: 4, maxHeight: 180, overflowY: 'auto' }}>
                                             {years.map(y => (
-                                                <div key={y._id} onClick={() => { setNewClass(p => ({ ...p, academicYearId: y._id })); setYearDropdown(false); }} style={{ padding: '12px 16px', fontSize: '0.88rem', color: newClass.academicYearId === y._id ? ACCENT : 'var(--c-muted)', cursor: 'pointer', borderRadius: 10, transition: 'all 0.1s' }}
-                                                    onMouseEnter={e => e.currentTarget.style.background = 'var(--c-surface-hover)'}
-                                                    onMouseLeave={e => e.currentTarget.style.background = ''}
-                                                >{y.name} Operation</div>
+                                                <div key={y._id} onClick={() => { setNewClass(p => ({ ...p, academicYearId: y._id })); setYearDropdown(false); }}
+                                                    style={{ padding: '8px 12px', fontSize: '0.85rem', cursor: 'pointer', background: newClass.academicYearId === y._id ? ACCENT + '15' : 'transparent', color: newClass.academicYearId === y._id ? ACCENT : 'var(--c-text)' }}
+                                                >{y.name}</div>
                                             ))}
                                         </div>
                                     )}
                                 </div>
-                                <Btn accent={ACCENT} type="submit" disabled={saving} full style={{ height: 52, borderRadius: 16 }}>
-                                    {saving ? <Loader2 size={20} className="animate-spin" /> : <ChevronRight size={20} />}
-                                    {saving ? 'Processing...' : 'Deploy Sector'}
-                                </Btn>
+                                <button type="submit" disabled={saving} style={{
+                                    padding: '10px', borderRadius: 10, border: 'none', cursor: saving ? 'not-allowed' : 'pointer',
+                                    background: ACCENT, color: 'white', fontWeight: 600, fontSize: '0.85rem',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                }}>
+                                    {saving ? 'Creating…' : <><ChevronRight size={16} /> Create Class</>}
+                                </button>
                             </form>
-                        </Card>
-                    )}
-
-                    {step === 2 && createdClass && (
-                        <Card accent={ACCENT} style={{ padding: 32 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-                                <div style={{ padding: 8, borderRadius: 10, background: ACCENT + '20', color: ACCENT }}><Layers size={18} /></div>
-                                <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--c-text)', margin: 0 }}>Inject units: {createdClass.name}</h3>
+                        </div>
+                    ) : (
+                        <div style={{ padding: '20px', borderRadius: 14, background: 'var(--c-card-bg)', border: '1px solid var(--c-border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                                <Layers size={16} color={ACCENT} />
+                                <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--c-text)' }}>Add Subjects: {createdClass?.name}</h3>
                             </div>
-                            <form onSubmit={saveSubject} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                                <div><Label>Unit Title</Label><Input accent={ACCENT} value={newSubject.name} onChange={e => setNewSubject(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Quantum Physics" required /></div>
-                                <div><Label>Unit Code</Label><Input accent={ACCENT} value={newSubject.code} onChange={e => setNewSubject(p => ({ ...p, code: e.target.value.toUpperCase() }))} placeholder="e.g. QP-101" required /></div>
-                                <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                                    <Btn accent={ACCENT} type="submit" disabled={saving} full style={{ height: 48, borderRadius: 14 }}>
-                                        {saving ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
-                                        {editingSub ? 'Sync Unit' : 'Inject Unit'}
-                                    </Btn>
-                                    {editingSub && <Btn ghost onClick={() => { setEditingSub(null); setNewSubject({ name: '', code: '' }); }}>Abort</Btn>}
+                            <form onSubmit={saveSubject} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                <input placeholder="Subject name" value={newSubject.name} onChange={e => setNewSubject(p => ({ ...p, name: e.target.value }))} required style={inputStyle} />
+                                <input placeholder="Subject code" value={newSubject.code} onChange={e => setNewSubject(p => ({ ...p, code: e.target.value.toUpperCase() }))} required style={inputStyle} />
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <button type="submit" disabled={saving} style={{
+                                        flex: 1, padding: '8px', borderRadius: 8, border: 'none', cursor: saving ? 'not-allowed' : 'pointer',
+                                        background: ACCENT, color: 'white', fontWeight: 600, fontSize: '0.8rem',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                                    }}>
+                                        {saving ? 'Saving…' : <><Plus size={14} /> Add Subject</>}
+                                    </button>
+                                    {editingSub && <button type="button" onClick={() => { setEditingSub(null); setNewSubject({ name: '', code: '' }); }} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid var(--c-border)', background: 'var(--c-surface)', color: 'var(--c-muted)', fontSize: '0.8rem', cursor: 'pointer' }}>Cancel</button>}
                                 </div>
                             </form>
-
                             {addedSubjects.length > 0 && (
-                                <div style={{ marginTop: 32 }}>
-                                    <label style={{ fontSize: '0.7rem', fontWeight: 800, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 12 }}>Linked Units ({addedSubjects.length})</label>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                                        {addedSubjects.map(s => <SubjectPill key={s._id} subject={s} accent={ACCENT} onDelete={deleteSubject} />)}
-                                    </div>
+                                <div style={{ marginTop: 16 }}>
+                                    <p style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Subjects ({addedSubjects.length})</p>
+                                    {addedSubjects.map(s => (
+                                        <div key={s._id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 8, background: 'var(--c-surface)', border: '1px solid var(--c-border)', marginBottom: 6 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <BookOpen size={14} color={ACCENT} />
+                                                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--c-text)' }}>{s.name}</span>
+                                                <span style={{ fontSize: '0.7rem', color: 'var(--c-muted)' }}>{s.code}</span>
+                                            </div>
+                                            <button onClick={() => deleteSubject(s._id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 4 }}>
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </div>
+                                    ))}
                                 </div>
                             )}
-                            <button onClick={finish} style={{ width: '100%', marginTop: 24, padding: '12px', background: 'var(--c-surface-hover)', border: '1px solid var(--c-border)', borderRadius: 12, cursor: 'pointer', fontSize: '0.8rem', color: ACCENT, fontWeight: 700, transition: 'all 0.2s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--c-surface)'} onMouseLeave={e => e.currentTarget.style.background = 'var(--c-surface-hover)'}>
-                                Seal Construction — Return to Architect
+                            <button onClick={() => { setStep(1); setNewClass({ name: '', code: '', academicYearId: '' }); setAddedSubjects([]); setCreatedClass(null); fetchData(); }} style={{ width: '100%', marginTop: 12, padding: '8px', background: 'var(--c-surface)', border: '1px solid var(--c-border)', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', color: 'var(--c-muted)', fontWeight: 600 }}>
+                                Done — Back to Classes
                             </button>
-                        </Card>
+                        </div>
                     )}
                 </div>
 
-                {/* Registry Panel */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                {/* Class List */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                            <Book size={20} color={ACCENT} />
-                            <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--c-text)', margin: 0, fontFamily: 'Space Grotesk, sans-serif' }}>Sector Registry</h3>
-                        </div>
-                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--c-muted)', background: 'var(--c-surface-hover)', padding: '4px 14px', borderRadius: 999, border: '1px solid var(--c-border)' }}>{classes.length} Active Sectors</span>
+                        <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, color: 'var(--c-text)' }}>Classes</h3>
+                        <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--c-muted)', background: 'var(--c-surface)', padding: '3px 10px', borderRadius: 8 }}>{classes.length}</span>
                     </div>
-
                     {classes.length === 0 ? (
-                        <Card style={{ padding: '60px 0', textAlign: 'center', borderStyle: 'dashed' }}>
-                            <Empty icon={Layers} title="Registry Empty" sub="Initialize a new class sector to begin orchestration" />
-                        </Card>
+                        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--c-muted)', fontSize: '0.85rem' }}>No classes yet</div>
                     ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                             {classes.map(cls => {
                                 const clsSubjects = subjects.filter(s => s.classId?._id === cls._id);
                                 const isExpanded = expanded[cls._id];
                                 return (
-                                    <Card key={cls._id} style={{
-                                        padding: 0, overflow: 'hidden',
-                                        background: 'var(--c-card-bg)',
-                                        borderColor: isExpanded ? ACCENT + '40' : 'var(--c-border)'
-                                    }}>
-                                        <div style={{ padding: '20px 24px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-                                                <div style={{
-                                                    width: 54, height: 54, borderRadius: 18, background: ACCENT + '08',
-                                                    border: `1px solid ${ACCENT}15`, display: 'flex', alignItems: 'center',
-                                                    justifyContent: 'center', color: ACCENT
-                                                }}>
-                                                    <Layout size={24} />
-                                                </div>
+                                    <div key={cls._id} style={{ borderRadius: 12, background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', overflow: 'hidden' }}>
+                                        <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flex: 1 }} onClick={() => { setExpanded(p => ({ ...p, [cls._id]: !isExpanded })); setCreatedClass(cls); setStep(2); setAddedSubjects(clsSubjects); }}>
+                                                <Layers size={16} color={ACCENT} />
                                                 <div>
-                                                    <h4 style={{ fontWeight: 800, color: 'var(--c-text)', fontSize: '1.1rem', margin: '0 0 4px 0' }}>{cls.name}</h4>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                                        <span style={{ fontSize: '0.7rem', fontWeight: 800, color: ACCENT, background: ACCENT + '15', padding: '2px 8px', borderRadius: 6 }}>{cls.code}</span>
-                                                        <div style={{ width: 4, height: 4, borderRadius: '50%', background: 'var(--c-border)' }} />
-                                                        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--c-muted)' }}>{clsSubjects.length} Curriculum Units</span>
-                                                    </div>
+                                                    <p style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--c-text)', margin: 0 }}>{cls.name}</p>
+                                                    <p style={{ fontSize: '0.7rem', color: 'var(--c-muted)', margin: 0 }}>{cls.code} · {clsSubjects.length} subjects</p>
                                                 </div>
                                             </div>
-                                            <div style={{ display: 'flex', gap: 10 }}>
-                                                <button onClick={() => openForClass(cls)} style={{ padding: '8px 16px', borderRadius: 12, background: 'var(--c-surface-hover)', border: '1px solid var(--c-border)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, color: 'var(--c-text)', display: 'flex', alignItems: 'center', gap: 8 }} onMouseEnter={e => e.currentTarget.style.background = ACCENT + '20'}>
-                                                    <Plus size={14} /> Inject
-                                                </button>
-                                                <button onClick={() => setExpanded(p => ({ ...p, [cls._id]: !p[cls._id] }))} style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--c-surface-hover)', border: '1px solid var(--c-border)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--c-text)' }}>
-                                                    {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-                                                </button>
-                                                <button onClick={() => deleteClass(cls._id)} style={{ width: 38, height: 38, borderRadius: 12, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171' }}>
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </div>
+                                            <button onClick={() => deleteClass(cls._id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 4 }}>
+                                                <Trash2 size={12} />
+                                            </button>
                                         </div>
-
-                                        {isExpanded && (
-                                            <div style={{ padding: '0 24px 24px 24px', animation: 'fadeIn 0.3s ease-out' }}>
-                                                <div style={{ padding: '20px', borderRadius: 20, background: 'var(--c-bg)', border: '1px solid var(--c-border)' }}>
-                                                    {clsSubjects.length === 0 ? (
-                                                        <p style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--c-muted)', padding: '10px 0', margin: 0 }}>No curriculum units active in this sector</p>
-                                                    ) : (
-                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-                                                            {clsSubjects.map(sub => (
-                                                                <div key={sub._id} style={{ padding: '12px 14px', borderRadius: 16, background: 'var(--c-surface-hover)', border: '1px solid var(--c-border)', position: 'relative' }}>
-                                                                    <p style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--c-text)', margin: '0 0 2px 0' }}>{sub.name}</p>
-                                                                    <p style={{ fontSize: '0.65rem', color: ACCENT, fontWeight: 700, margin: 0 }}>{sub.code}</p>
-                                                                    <button onClick={() => deleteSubject(sub._id)} style={{ position: 'absolute', top: 12, right: 12, width: 24, height: 24, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171' }}>
-                                                                        <Trash2 size={12} />
-                                                                    </button>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </Card>
+                                    </div>
                                 );
                             })}
                         </div>
                     )}
                 </div>
             </div>
-            <style>{`
-                @keyframes spin { to { transform: rotate(360deg); } }
-                @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
-            `}</style>
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         </div>
     );
 }

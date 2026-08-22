@@ -9,7 +9,8 @@ import remarkGfm from 'remark-gfm';
 import { Card, PageHeader, Spinner, Btn, Select, Label, Input, Textarea, Empty, Badge, SectionTitle } from "../components/PageLayout";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const API = "http://localhost:5000/api/v1";
+import api from '../services/api';
+const API = api.defaults.baseURL;
 const ACCENT = "#fbbf24";
 
 const gradeStyle = (pct) => pct >= 80 ? { color: '#34d399', bar: '#34d399' } : pct >= 60 ? { color: '#fbbf24', bar: '#fbbf24' } : { color: '#f87171', bar: '#f87171' };
@@ -82,13 +83,21 @@ export default function Marks() {
         const token = localStorage.getItem("token");
         if (!token) return;
         const decoded = jwtDecode(token);
-        setUser(decoded);
-        fetchMarks(token);
-        if (decoded.role === "teacher") { fetchStudents(token); fetchSubjects(token); }
-        else { fetchSubjects(token); }
+        Promise.resolve().then(() => setUser(decoded));
+        const marksUrl = filterSub ? `${API}/marks?subjectId=${filterSub}` : `${API}/marks`;
+        axios.get(marksUrl, { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => { setMarks(res.data); setLoading(false); })
+            .catch(() => { setLoading(false); });
+        if (decoded.role === "teacher") {
+            axios.get(`${API}/user/students`, { headers: { Authorization: `Bearer ${token}` } })
+                .then(res => setStudents(res.data))
+                .catch(() => { /* ignore student fetch errors */ });
+        }
+        axios.get(`${API}/user/subjects`, { headers: { Authorization: `Bearer ${token}` } })
+            .then(res => setSubjects(res.data))
+            .catch(() => { /* ignore subject fetch errors */ });
         const socket = initializeSocket(decoded.id, decoded.classId, decoded.role);
         if (socket) {
-            socket.on("connect", () => { if (decoded.id) socket.emit("join_room", `user:${decoded.id}`); });
             const handleUpdate = u => {
                 if (u?._id) {
                     setMarks(prev => {
@@ -96,17 +105,15 @@ export default function Marks() {
                         return ex ? prev.map(m => m._id === u._id ? u : m) : [u, ...prev];
                     });
                 } else {
-                    fetchMarks(token);
+                    axios.get(marksUrl, { headers: { Authorization: `Bearer ${token}` } })
+                        .then(res => setMarks(res.data))
+                        .catch(() => { /* ignore reload errors */ });
                 }
             };
             socket.on("marks_updated", handleUpdate);
             return () => socket.off("marks_updated", handleUpdate);
         }
     }, [filterSub]);
-
-    const fetchMarks = async (tk) => { try { const url = filterSub ? `${API}/marks?subjectId=${filterSub}` : `${API}/marks`; const res = await axios.get(url, { headers: { Authorization: `Bearer ${tk}` } }); setMarks(res.data); } catch { } setLoading(false); };
-    const fetchStudents = async (tk) => { try { const res = await axios.get(`${API}/user/students`, { headers: { Authorization: `Bearer ${tk}` } }); setStudents(res.data); } catch { } };
-    const fetchSubjects = async (tk) => { try { const res = await axios.get(`${API}/user/subjects`, { headers: { Authorization: `Bearer ${tk}` } }); setSubjects(res.data); } catch { } };
 
     if (loading) return <Spinner label="Loading marks…" />;
 

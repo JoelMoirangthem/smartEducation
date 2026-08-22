@@ -7,15 +7,16 @@ const {
     getFaceServiceHealth
 } = require("../controllers/faceAttendance.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
+const { faceRegisterLimiter, faceMarkLimiter } = require("../middlewares/rateLimit.middleware");
 
 // All routes require authentication
 router.use(authMiddleware);
 
 // Student registers their face
-router.post("/register", registerStudentFace);
+router.post("/register", faceRegisterLimiter, registerStudentFace);
 
 // Teacher marks attendance via face recognition
-router.post("/mark", markFaceAttendance);
+router.post("/mark", faceMarkLimiter, markFaceAttendance);
 
 // Check if user has registered face
 router.get("/check/:userId", checkFaceRegistration);

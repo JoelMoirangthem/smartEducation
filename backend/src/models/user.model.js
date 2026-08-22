@@ -8,7 +8,9 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
+    lowercase: true, // agent + UI + login must all agree regardless of case
+    trim: true
   },
   password: {
     type: String,

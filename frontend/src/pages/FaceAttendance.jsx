@@ -1,17 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
-import { io } from 'socket.io-client';
+import api from '../services/api';
+import { initializeSocket, getSocket, disconnectSocket } from '../services/socket.service';
 import { Video, Play, Square, Download, Users, Clock, CheckCircle, Loader2, AlertCircle, ScanFace } from 'lucide-react';
+import { toast } from 'react-toastify';
 import { Card, PageHeader, Spinner, Btn, Empty } from '../components/PageLayout';
 
-const API = 'http://localhost:5000/api/v1';
 const ACCENT = '#06b6d4';
 
 export default function FaceAttendance() {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
-    const socketRef = useRef(null);
     const intervalRef = useRef(null);
+    // Mirror of the MediaStream — state closures go stale in the unmount cleanup
+    const streamRef = useRef(null);
 
     const [stream, setStream] = useState(null);
     const [sessionId, setSessionId] = useState(null);
@@ -19,37 +20,69 @@ export default function FaceAttendance() {
     const [isScanning, setIsScanning] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [success, setSuccess] = useState('');
     const [lastRecognized, setLastRecognized] = useState(null);
     const [scanCount, setScanCount] = useState(0);
+    const [showSessionForm, setShowSessionForm] = useState(false);
+    const [sessionForm, setSessionForm] = useState({ subjectId: '', classId: '' });
+    const [subjects, setSubjects] = useState([]);
+    const [classes, setClasses] = useState([]);
+
+    const stopCamera = () => {
+        streamRef.current?.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+        if (videoRef.current) videoRef.current.srcObject = null;
+        setStream(null);
+    };
+
+    const stopScan = () => {
+        clearInterval(intervalRef.current); intervalRef.current = null; setIsScanning(false); setScanCount(0);
+    };
 
     useEffect(() => {
         const user = JSON.parse(localStorage.getItem('user') || '{}');
-        socketRef.current = io('http://localhost:5000');
-        socketRef.current.on('connect', () => {
-            if (user?.classId) socketRef.current.emit('join_room', `class:${user.classId}`);
-        });
-        socketRef.current.on('attendance_update', data => {
+        if (!user?.id) return;
+        initializeSocket(user.id, user.classId, user.role);
+
+        const socket = getSocket();
+        socket.on('attendance_update', data => {
             setAttendanceList(prev => prev.find(x => x.studentId === data.studentId) ? prev : [data, ...prev]);
             toast.success(`${data.studentName} identified and logged.`);
         });
-        loadSession();
-        return () => { stopCamera(); stopScan(); socketRef.current?.disconnect(); };
+        api.get('/attendance/stats')
+            .then(res => {
+                if (res.data.isActive) { setSessionId(res.data.sessionId); setAttendanceList(res.data.students || []); }
+            })
+            .catch(() => { /* no active session */ });
+
+        return () => {
+            stopCamera(); stopScan();
+            // Only remove our listener, don't disconnect the shared socket
+            const s = getSocket();
+            if (s) s.off('attendance_update');
+        };
+        // stopCamera/stopScan are one-time cleanup helpers; socket + session load intentionally run once
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const loadSession = async () => {
+    const openSessionForm = async () => {
+        setShowSessionForm(true);
+        // Fetch subjects and classes for the form
         try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.get(`${API}/attendance/stats`, { headers: { Authorization: `Bearer ${tk}` } });
-            if (res.data.isActive) { setSessionId(res.data.sessionId); setAttendanceList(res.data.students || []); }
-        } catch { }
+            const [subRes, clsRes] = await Promise.all([
+                api.get('/user/subjects').catch(() => ({ data: [] })),
+                api.get('/user/classes').catch(() => ({ data: [] }))
+            ]);
+            setSubjects(subRes.data || []);
+            setClasses(clsRes.data || []);
+        } catch { /* ignore */ }
     };
 
     const startSession = async () => {
-        setLoading(true); setError('');
+        const { subjectId, classId } = sessionForm;
+        if (!subjectId || !classId) { setError('Subject and class are required'); return; }
+        setLoading(true); setShowSessionForm(false); setError('');
         try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.post(`${API}/attendance/start`, {}, { headers: { Authorization: `Bearer ${tk}` } });
+            const res = await api.post('/attendance/start', { subjectId, classId });
             setSessionId(res.data.sessionId); setAttendanceList([]);
             await startCamera();
             toast.success('Attendance synchronization active.');
@@ -60,8 +93,7 @@ export default function FaceAttendance() {
     const endSession = async () => {
         setLoading(true);
         try {
-            const tk = localStorage.getItem('token');
-            await axios.post(`${API}/attendance/end`, {}, { headers: { Authorization: `Bearer ${tk}` } });
+            await api.post('/attendance/end', {});
             setSessionId(null); stopCamera(); stopScan();
             toast.info('Attendance session terminated.');
         } catch (e) { setError(e.response?.data?.message || 'Failed to terminate session'); }
@@ -71,13 +103,10 @@ export default function FaceAttendance() {
     const startCamera = async () => {
         try {
             const ms = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' } });
+            streamRef.current = ms;
             if (videoRef.current) videoRef.current.srcObject = ms;
             setStream(ms);
         } catch { setError('Visual input access denied. Please verify hardware permissions.'); }
-    };
-
-    const stopCamera = () => {
-        stream?.getTracks().forEach(t => t.stop()); setStream(null);
     };
 
     const captureFrame = () => {
@@ -91,28 +120,26 @@ export default function FaceAttendance() {
     const startScan = () => {
         if (!sessionId || !stream) { setError('Initialize session and visual input first'); return; }
         setIsScanning(true); setScanCount(0); setLastRecognized(null); setError('');
+        let inFlight = false;
         intervalRef.current = setInterval(async () => {
+            if (inFlight) return; // skip tick if previous request hasn't completed
             const frame = captureFrame(); if (!frame) return;
             setScanCount(p => p + 1);
+            inFlight = true;
             try {
-                const tk = localStorage.getItem('token');
-                const res = await axios.post(`${API}/face-attendance/mark`, { sessionId, image: frame }, { headers: { Authorization: `Bearer ${tk}` } });
+                const res = await api.post('/face-attendance/mark', { sessionId, image: frame });
                 if (res.data.recognized && !res.data.alreadyProcessing) {
                     setLastRecognized({ name: res.data.student?.name, confidence: res.data.confidence, time: new Date() });
                 }
-            } catch { }
+            } catch { /* frame rejected or face not matched */ }
+            finally { inFlight = false; }
         }, 500);
-    };
-
-    const stopScan = () => {
-        clearInterval(intervalRef.current); intervalRef.current = null; setIsScanning(false); setScanCount(0);
     };
 
     const exportCSV = async () => {
         if (!sessionId) return;
         try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.get(`${API}/attendance/session/${sessionId}/export`, { headers: { Authorization: `Bearer ${tk}` }, responseType: 'blob' });
+            const res = await api.get(`/attendance/session/${sessionId}/export`, { responseType: 'blob' });
             const url = window.URL.createObjectURL(new Blob([res.data]));
             const a = document.createElement('a'); a.href = url;
             a.download = `attendance-index-${new Date().toISOString().split('T')[0]}.csv`;
@@ -130,7 +157,7 @@ export default function FaceAttendance() {
                 icon={ScanFace}
                 right={
                     !sessionId
-                        ? <Btn accent={ACCENT} onClick={startSession} disabled={loading} style={{ height: 48, minWidth: 180 }}>
+                        ? <Btn accent={ACCENT} onClick={openSessionForm} disabled={loading} style={{ height: 48, minWidth: 180 }}>
                             {loading ? <Loader2 size={20} className="animate-spin" /> : <Play size={18} />} INITIALIZE SESSION
                         </Btn>
                         : <div style={{ display: 'flex', gap: 12 }}>
@@ -306,6 +333,43 @@ export default function FaceAttendance() {
                     </div>
                 </Card>
             </div>
+
+            {/* Session Initiation Form Modal */}
+            {showSessionForm && (
+                <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}>
+                    <div style={{ width: '100%', maxWidth: 440, background: 'var(--c-card-bg)', border: '1px solid var(--c-border)', borderRadius: 20, padding: 28 }}>
+                        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', fontWeight: 800, color: 'var(--c-text)', marginBottom: 20 }}>Initialize Attendance Session</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            <div>
+                                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 6 }}>Subject</label>
+                                <select
+                                    value={sessionForm.subjectId}
+                                    onChange={e => setSessionForm(p => ({ ...p, subjectId: e.target.value }))}
+                                    style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1px solid var(--c-border)', background: 'var(--c-surface)', color: 'var(--c-text)', fontSize: '0.85rem', outline: 'none' }}
+                                >
+                                    <option value="">Select a subject...</option>
+                                    {subjects.map(s => <option key={s._id} value={s._id}>{s.name} ({s.code})</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--c-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 6 }}>Class</label>
+                                <select
+                                    value={sessionForm.classId}
+                                    onChange={e => setSessionForm(p => ({ ...p, classId: e.target.value }))}
+                                    style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1px solid var(--c-border)', background: 'var(--c-surface)', color: 'var(--c-text)', fontSize: '0.85rem', outline: 'none' }}
+                                >
+                                    <option value="">Select a class...</option>
+                                    {classes.map(c => <option key={c._id} value={c._id}>{c.name}{c.section ? ` - ${c.section}` : ''}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                            <button onClick={() => setShowSessionForm(false)} style={{ flex: 1, padding: '10px', borderRadius: 12, border: '1px solid var(--c-border)', background: 'transparent', color: 'var(--c-muted)', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                            <button onClick={startSession} disabled={loading || !sessionForm.subjectId || !sessionForm.classId} style={{ flex: 1, padding: '10px', borderRadius: 12, border: 'none', background: ACCENT, color: 'white', fontWeight: 700, cursor: 'pointer', opacity: (!sessionForm.subjectId || !sessionForm.classId) ? 0.5 : 1 }}>Start Session</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <style>{`
                 @keyframes scanline { 

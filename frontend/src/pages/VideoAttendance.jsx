@@ -5,7 +5,8 @@ import VideoFaceRecognition from '../components/VideoFaceRecognition';
 import { CheckCircle, Users, Clock, ArrowLeft, Square, Loader2, ScanFace } from 'lucide-react';
 import { Card, PageHeader, Spinner, Btn, Empty } from '../components/PageLayout';
 
-const API = 'http://localhost:5000/api/v1';
+import api from '../services/api';
+const API = api.defaults.baseURL;
 const ACCENT = '#06b6d4';
 
 export default function VideoAttendance() {
@@ -17,26 +18,14 @@ export default function VideoAttendance() {
     const [error, setError] = useState('');
 
     useEffect(() => {
-        fetchSession();
-        fetchAttendance();
+        const tk = localStorage.getItem('token');
+        axios.get(`${API}/attendance/session/${sessionId}`, { headers: { Authorization: `Bearer ${tk}` } })
+            .then(res => { setSession(res.data); setLoading(false); })
+            .catch(() => { setError('Failed to load session'); setLoading(false); });
+        axios.get(`${API}/attendance/session/${sessionId}/records`, { headers: { Authorization: `Bearer ${tk}` } })
+            .then(res => setAttendanceList(res.data.records || []))
+            .catch(() => { /* ignore record fetch errors */ });
     }, [sessionId]);
-
-    const fetchSession = async () => {
-        try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.get(`${API}/attendance/session/${sessionId}`, { headers: { Authorization: `Bearer ${tk}` } });
-            setSession(res.data);
-        } catch { setError('Failed to load session'); }
-        setLoading(false);
-    };
-
-    const fetchAttendance = async () => {
-        try {
-            const tk = localStorage.getItem('token');
-            const res = await axios.get(`${API}/attendance/session/${sessionId}/records`, { headers: { Authorization: `Bearer ${tk}` } });
-            setAttendanceList(res.data.records || []);
-        } catch { }
-    };
 
     const handleMarked = (result) => setAttendanceList(p => [{ student: result.student, markedAt: result.markedAt, confidence: result.confidence, attendanceType: 'face' }, ...p]);
 

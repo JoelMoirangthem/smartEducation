@@ -194,6 +194,53 @@ const LoginRoleSelection = () => {
                 })}
             </div>
 
+            {/* Create Account CTA */}
+            <div style={{
+                marginTop: 44,
+                pointerEvents: 'auto',
+                position: 'relative',
+                zIndex: 10,
+                textAlign: 'center',
+                animation: 'fadeUp 0.6s ease-out 0.4s forwards',
+                opacity: 0
+            }}>
+                <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    padding: '18px 28px', borderRadius: 20,
+                    background: 'var(--c-surface)',
+                    border: '1px solid var(--c-border)',
+                    backdropFilter: 'blur(16px) saturate(180%)',
+                    boxShadow: '0 12px 32px rgba(0,0,0,0.08)',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center'
+                }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--c-muted)', fontWeight: 600, marginRight: 6 }}>
+                        New to EduSmart?
+                    </span>
+                    {roles.filter(r => r.id === 'admin').map(r => (
+                        <button
+                            key={'reg-' + r.id}
+                            onClick={() => navigate(`/register/${r.id.toLowerCase()}`)}
+                            onMouseEnter={() => setHovered(r.id)}
+                            onMouseLeave={() => setHovered(null)}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 8,
+                                padding: '10px 18px', borderRadius: 12, border: 'none', cursor: 'pointer',
+                                background: r.gradient,
+                                color: 'white', fontWeight: 700, fontSize: '0.78rem',
+                                letterSpacing: '0.02em',
+                                boxShadow: `0 4px 14px ${r.glow}`,
+                                transition: 'all 0.25s cubic-bezier(0.34,1.56,0.64,1)',
+                                transform: hovered === r.id ? 'translateY(-3px) scale(1.03)' : 'translateY(0)',
+                            }}
+                        >
+                            {r.icon ? <r.icon size={14} color="white" strokeWidth={2.4} /> : null}
+                            Sign up as {r.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             {/* Footer */}
             <p style={{ marginTop: 48, fontSize: '0.72rem', color: 'var(--c-muted)', opacity: 0.4 }}>
                 © 2026 EduSmart Platform — Secure & AI-Assisted Learning

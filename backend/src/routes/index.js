@@ -1,24 +1,34 @@
 const express = require("express");
-const authRoutes = require("./auth.routes.js");
-const userRoutes = require("./user.routes.js");
-const notificationRoutes = require("./notification.routes.js");
-const noteRoutes = require("./note.routes.js");
-const attendanceRoutes = require("./attendance.routes.js");
-const markRoutes = require("./mark.routes.js");
-const noticeRoutes = require("./notice.routes.js");
-const faceAttendanceRoutes = require("./faceAttendance.routes.js");
-
 const router = express.Router();
 
-router.use("/v1/auth", authRoutes);
-router.use("/v1/user", userRoutes);
-router.use("/v1/notifications", notificationRoutes);
-router.use("/v1/notes", noteRoutes);
-router.use("/v1/attendance", attendanceRoutes);
-router.use("/v1/marks", markRoutes);
-router.use("/v1/notices", noticeRoutes);
+// Core modules
+router.use("/v1/auth", require("./auth.routes"));
+router.use("/v1/user", require("./user.routes"));
+router.use("/v1/notifications", require("./notification.routes"));
+router.use("/v1/notes", require("./note.routes"));
+router.use("/v1/attendance", require("./attendance.routes"));
+router.use("/v1/marks", require("./mark.routes"));
+router.use("/v1/notices", require("./notice.routes"));
+router.use("/v1/face-attendance", require("./faceAttendance.routes"));
+
+// Academic modules
+router.use("/v1/exams", require("./exam.routes"));
+router.use("/v1/timetable", require("./timetable.routes"));
+router.use("/v1/library", require("./library.routes"));
+
+// Operations modules
+router.use("/v1/fees", require("./fee.routes"));
+router.use("/v1/transport", require("./transport.routes"));
+router.use("/v1/inventory", require("./inventory.routes"));
+router.use("/v1/leaves", require("./leave.routes"));
+router.use("/v1/events", require("./event.routes"));
+router.use("/v1/parents", require("./parent.routes"));
+
+// AI modules (tutor chat + agent live in the Python service; sessions CRUD stays here)
 router.use("/v1/ai", require("./ai.routes"));
 router.use("/v1/admin", require("./admin.routes"));
-router.use("/v1/face-attendance", faceAttendanceRoutes);
+
+// Internal relay for the Python agent's realtime side-effects
+router.use("/v1/internal", require("./internal.routes"));
 
 module.exports = router;

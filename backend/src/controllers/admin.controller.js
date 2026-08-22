@@ -1,7 +1,11 @@
+const bcrypt = require("bcryptjs");
 const Class = require("../models/class.model");
 const Subject = require("../models/subject.model");
 const User = require("../models/user.model");
 const AcademicYear = require("../models/academicYear.model");
+const AttendanceSession = require("../models/attendanceSession.model");
+const Notice = require("../models/notice.model");
+const Note = require("../models/note.model");
 
 // --- Class Management ---
 
@@ -35,26 +39,59 @@ const createClass = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: "Error creating class", error: error.message });
     }
-};
-
-const getClasses = async (req, res) => {
-    try {
-        const classes = await Class.find()
-            .populate("classTeacher", "name email")
-            .populate("academicYearId", "name");
-        res.json({ classes });
-    } catch (error) {
-        res.status(500).json({ message: "Error fetching classes", error: error.message });
-    }
-};
+};    const getClasses = async (req, res) => {
+        try {
+            const { academicYearId } = req.query;
+            const query = {};
+            if (academicYearId) query.academicYearId = academicYearId;
+            else {
+                // Default: only show classes from the current academic year
+                const currentYear = await AcademicYear.findOne({ isCurrent: true });
+                if (currentYear) query.academicYearId = currentYear._id;
+            }
+            const classes = await Class.find(query)
+                .populate("classTeacher", "name email")
+                .populate("academicYearId", "name");
+            res.json({ classes });
+        } catch (error) {
+            res.status(500).json({ message: "Error fetching classes", error: error.message });
+        }
+    };
 
 const deleteClass = async (req, res) => {
     try {
-        const deletedClass = await Class.findByIdAndDelete(req.params.id);
+        const cls = await Class.findById(req.params.id);
+        if (!cls) return res.status(404).json({ message: "Class not found" });
+
+        const classId = cls._id;
+
+        // Remove class references from users (students' classId, any teachers managing it)
+        await User.updateMany(
+            { $or: [{ classId }, { managedClassIds: classId }] },
+            { $unset: { classId: "" }, $pull: { managedClassIds: classId } }
+        );
+
+        // Delete subjects belonging to this class and clean teacher portfolios
+        const subjects = await Subject.find({ classId }).select("_id");
+        const subjectIds = subjects.map(s => s._id);
+        if (subjectIds.length > 0) {
+            await Subject.deleteMany({ _id: { $in: subjectIds } });
+            await User.updateMany(
+                { assignedSubjectIds: { $in: subjectIds } },
+                { $pull: { assignedSubjectIds: { $in: subjectIds } } }
+            );
+        }
+
+        // Delete class records/notices/notes instances tied to it
+        await AttendanceSession.deleteMany({ classId });
+        await Notice.deleteMany({ classId });
+        await Note.deleteMany({ classId });
+
+        await cls.deleteOne();
 
         // Emit real-time update
         const io = req.app.get("io");
-        if (io) io.emit("CLASS_DELETED", { classId: req.params.id });
+        if (io) io.emit("CLASS_DELETED", { classId: classId.toString() });
 
         res.json({ message: "Class deleted successfully" });
     } catch (error) {
@@ -111,21 +148,21 @@ const getSubjects = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: "Error fetching subjects", error: error.message });
     }
-};
+};    const updateSubject = async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { name, code, teacherId } = req.body;
 
-const updateSubject = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, code, teacherId } = req.body;
+            const updateData = {};
+            if (name !== undefined) updateData.name = name;
+            if (code !== undefined) updateData.code = code;
+            if (teacherId) updateData.$addToSet = { teachers: teacherId };
 
-        const updateData = { name, code };
-        if (teacherId) updateData.$addToSet = { teachers: teacherId };
-
-        const updatedSubject = await Subject.findByIdAndUpdate(
-            id,
-            updateData,
-            { new: true }
-        ).populate("teachers", "name email");
+            const updatedSubject = await Subject.findByIdAndUpdate(
+                id,
+                updateData,
+                { new: true }
+            ).populate("teachers", "name email");
 
         // Emit real-time update
         const io = req.app.get("io");
@@ -135,21 +172,34 @@ const updateSubject = async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: "Error updating subject", error: error.message });
     }
-};
+};    const deleteSubject = async (req, res) => {
+        try {
+            const subjectId = req.params.id;
 
-const deleteSubject = async (req, res) => {
-    try {
-        await Subject.findByIdAndDelete(req.params.id);
+            // Cascade: remove subject references from teachers' portfolios
+            await User.updateMany(
+                { assignedSubjectIds: subjectId },
+                { $pull: { assignedSubjectIds: subjectId } }
+            );
 
-        // Emit real-time update
-        const io = req.app.get("io");
-        if (io) io.emit("SUBJECT_DELETED", { subjectId: req.params.id });
+            // Cascade: delete associated attendance sessions, marks, notes, notices
+            await AttendanceSession.deleteMany({ subjectId });
+            const Mark = require("../models/mark.model");
+            await Mark.deleteMany({ subjectId });
+            await Note.deleteMany({ subjectId });
+            await Notice.deleteMany({ subjectId });
 
-        res.json({ message: "Subject deleted successfully" });
-    } catch (error) {
-        res.status(500).json({ message: "Error deleting subject", error: error.message });
-    }
-};
+            await Subject.findByIdAndDelete(subjectId);
+
+            // Emit real-time update
+            const io = req.app.get("io");
+            if (io) io.emit("SUBJECT_DELETED", { subjectId });
+
+            res.json({ message: "Subject deleted successfully" });
+        } catch (error) {
+            res.status(500).json({ message: "Error deleting subject", error: error.message });
+        }
+    };
 
 // Get students by class
 const getStudents = async (req, res) => {
@@ -235,10 +285,19 @@ const getUsers = async (req, res) => {
 }
 
 const updateUserAcademic = async (req, res) => {
-    try {
-        const { name, email, role, classId, classIds, subjectIds } = req.body;
-        const userId = req.params.id;
-        console.log(`>>> [AdminUpdate] Processing update for UID: ${userId} (${role})`);
+        try {
+            const { name, email, role, classId, classIds, subjectIds, password } = req.body;
+            const userId = req.params.id;
+
+            // Prevent self role escalation and cannot create other admins via this endpoint
+            if (userId === req.user.id) {
+                return res.status(400).json({ message: "Cannot modify your own account via this endpoint. Use profile settings." });
+            }
+            if (role === 'admin') {
+                return res.status(403).json({ message: "Cannot assign admin role via this endpoint." });
+            }
+
+            console.log(`>>> [AdminUpdate] Processing update for UID: ${userId} (${role})`);
 
         const mongoose = require("mongoose");
         if (!mongoose.Types.ObjectId.isValid(userId)) {
@@ -254,6 +313,14 @@ const updateUserAcademic = async (req, res) => {
         if (name) user.name = name;
         if (email) user.email = email;
         user.role = role;
+
+        // Admin-initiated password reset
+        if (password) {
+            if (password.length < 6) {
+                return res.status(400).json({ message: "New password must be at least 6 characters" });
+            }
+            user.password = await bcrypt.hash(password, 10);
+        }
 
         if (role === 'teacher') {
             // Unset redundant singular fields for teachers

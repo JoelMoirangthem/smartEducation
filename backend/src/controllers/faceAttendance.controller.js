@@ -6,9 +6,32 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 
 const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:5001';
 
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 20000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            throw new Error(`Python face service timed out after ${timeoutMs}ms`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
 // Rate limiting for video recognition - prevents duplicate marks from rapid frames
 const recentRecognitions = new Map();
 const RECOGNITION_COOLDOWN = 5000; // 5 seconds cooldown per student per session
+
+// Periodic cleanup to prevent memory leak (evict entries older than 1 hour)
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of recentRecognitions) {
+        if (now - timestamp > 3600000) recentRecognitions.delete(key);
+    }
+}, 300000); // Run every 5 minutes
 
 // Register student face
 const registerStudentFace = async (req, res) => {
@@ -16,16 +39,28 @@ const registerStudentFace = async (req, res) => {
         const { images } = req.body;
         const studentId = req.user.id;
 
+        // Only students may enroll their own face — staff accounts must never
+        // be markable via face recognition
+        if (req.user.role !== "student") {
+            return res.status(403).json({ message: "Only students can register face data" });
+        }
+
         if (!images || !Array.isArray(images) || images.length < 5) {
             return res.status(400).json({
                 message: "At least 5 face images are required for registration"
             });
         }
+        if (images.length > 15) {
+            return res.status(400).json({ message: "Maximum 15 images allowed" });
+        }
+        if (images.some(img => typeof img !== "string" || (!img.startsWith('data:image') && !/^[A-Za-z0-9+/=]+$/.test(img)))) {
+            return res.status(400).json({ message: "Images must be base64 strings" });
+        }
 
         console.log(`📸 Registering face for student ${studentId} with ${images.length} images`);
 
         // Call Python face service
-        const response = await fetch(`${PYTHON_SERVICE_URL}/register-face`, {
+        const response = await fetchWithTimeout(`${PYTHON_SERVICE_URL}/register-face`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -34,7 +69,7 @@ const registerStudentFace = async (req, res) => {
                 studentId: studentId,
                 images: images
             })
-        });
+        }, 60000); // First call may need model download/loading time
 
         const result = await response.json();
 
@@ -52,6 +87,7 @@ const registerStudentFace = async (req, res) => {
         if (existingFaceData) {
             // Update existing record
             existingFaceData.imagesCount = result.images_processed;
+            existingFaceData.registeredAt = new Date();
             existingFaceData.lastUpdated = new Date();
             await existingFaceData.save();
         } else {
@@ -98,7 +134,7 @@ const markFaceAttendance = async (req, res) => {
             return res.status(404).json({ message: "Session not found" });
         }
 
-        if (!session.isActive) {
+        if (!session.isActive || session.expiresAt < new Date()) {
             return res.status(400).json({ message: "Session is not active" });
         }
 
@@ -108,13 +144,13 @@ const markFaceAttendance = async (req, res) => {
 
         console.log(`🔍 Processing face recognition for session ${sessionId}`);
         // Call Python face service for recognition
-        const response = await fetch(`${PYTHON_SERVICE_URL}/recognize-face`, {
+        const response = await fetchWithTimeout(`${PYTHON_SERVICE_URL}/recognize-face`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({ image })
-        });
+        }, 20000);
 
         const result = await response.json();
 
@@ -155,22 +191,22 @@ const markFaceAttendance = async (req, res) => {
             });
         }
 
-        // Verify student is in the class
+        // Verify student is in the class (fail-closed: enrollment is mandatory)
         const student = await User.findById(studentId);
         if (!student) {
             return res.status(404).json({ message: "Student not found in database" });
         }
-
-        // Check class enrollment if both have classId
-        if (student.classId && session.classId) {
-            if (student.classId.toString() !== session.classId.toString()) {
-                console.log(`⚠️  Student classId: ${student.classId}, Session classId: ${session.classId}`);
-                return res.status(403).json({
-                    message: "Student is not enrolled in this class"
-                });
-            }
-        } else {
-            console.log(`ℹ️  Skipping classId check - Student classId: ${student.classId}, Session classId: ${session.classId}`);
+        if (student.role !== "student" || !student.classId) {
+            console.log(`⚠️  Rejected ${studentId}: not an enrolled student (role=${student.role}, classId=${student.classId})`);
+            return res.status(403).json({
+                message: "User is not an enrolled student"
+            });
+        }
+        if (student.classId.toString() !== session.classId.toString()) {
+            console.log(`⚠️  Student classId: ${student.classId}, Session classId: ${session.classId}`);
+            return res.status(403).json({
+                message: "Student is not enrolled in this class"
+            });
         }
 
         // Check if student already marked attendance for this session
@@ -181,6 +217,8 @@ const markFaceAttendance = async (req, res) => {
 
         if (existingRecord) {
             console.log(`⚠️ Attendance already marked for student ${studentId}`);
+            // Apply cooldown so live video frames stop re-querying the DB
+            recentRecognitions.set(cooldownKey, Date.now());
             return res.status(200).json({
                 recognized: true,
                 alreadyMarked: true,
@@ -278,7 +316,7 @@ const checkFaceRegistration = async (req, res) => {
 // Get face service health
 const getFaceServiceHealth = async (req, res) => {
     try {
-        const response = await fetch(`${PYTHON_SERVICE_URL}/health`);
+        const response = await fetchWithTimeout(`${PYTHON_SERVICE_URL}/health`, {}, 5000);
         const result = await response.json();
 
         res.json({
@@ -286,7 +324,7 @@ const getFaceServiceHealth = async (req, res) => {
             registeredInDB: await FaceData.countDocuments({ isRegistered: true })
         });
     } catch (error) {
-        res.status(500).json({
+        res.status(503).json({
             message: "Python face service unavailable",
             error: error.message
         });
