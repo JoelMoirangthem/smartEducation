@@ -1,0 +1,109 @@
+# Render Blueprint for EduSmart — Free Tier (₹0) Architecture
+# https://render.com/docs/blueprint-spec
+# Deploys: 1) Node backend (+ serves frontend dist via Express static when NODE_ENV=production)
+#          2) Python Agent (FastAPI) — optional but needed for AI chat
+#          3) Optional static frontend (if you want split Vercel-style on Render)
+# Face service is OFF by default for free-tier (set PYTHON_SERVICE_URL empty)
+# MongoDB: Use Atlas Free (512MB) — set MONGODB_URI as env var
+
+services:
+  # ── Backend: Node + Express + Socket.IO :10000 (Render injects PORT) ──
+  - type: web
+    name: edusmart-backend
+    env: node
+    plan: free
+    region: singapore # closest to India; change as needed: oregon, frankfurt, etc.
+    branch: main
+    buildCommand: |
+      npm ci --prefix backend &&
+      npm ci --prefix frontend &&
+      VITE_API_URL=/api/v1 npm run build --prefix frontend
+    startCommand: node backend/src/server.js
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false # paste your Atlas SRV URI in the Render dashboard (encode @ in password as %40) — never commit it
+      - key: JWT_SECRET
+        sync: false # generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))" — must match agent's JWT_SECRET
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      - key: CORS_ORIGIN
+        value: https://edusmart-frontend.onrender.com,https://edusmart-backend.onrender.com
+      - key: AGENT_PY_URL
+        value: https://edusmart-agent.onrender.com
+      - key: PYTHON_SERVICE_URL
+        value: # leave empty to disable face (free) — QR attendance still works
+      - key: AGENT_RELAY_SECRET
+        sync: false # generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))" — must match agent
+      - key: AGENTROUTER_API_KEY
+        sync: false
+      - key: AGENTROUTER_MODEL
+        value: gpt-5.6-sol
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+
+  # ── Agent: Python FastAPI :8000 (Docker) ──
+  - type: web
+    name: edusmart-agent
+    env: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./backend/agent-py/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: AGENT_PY_HOST
+        value: 0.0.0.0
+      - key: AGENT_PY_PORT
+        value: 8000
+      - key: MONGODB_URI
+        sync: false # same Atlas URI as backend — set in dashboard
+      - key: JWT_SECRET
+        sync: false # must match backend JWT_SECRET — copy same value from backend service
+      - key: CORS_ORIGIN
+        value: https://edusmart-frontend.onrender.com,https://edusmart-backend.onrender.com
+      - key: AGENT_RELAY_SECRET
+        sync: false # must match backend — copy same value
+      - key: NODE_API_URL
+        value: https://edusmart-backend.onrender.com
+      - key: AGENTROUTER_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+
+  # ── Frontend Static (optional — use if you prefer split vs single-service) ──
+  # If you use Vercel for frontend, disable this service and set VITE_API_URL on Vercel.
+  # If you keep this, backend's static serving (app.js) is redundant but harmless.
+  - type: web
+    name: edusmart-frontend
+    env: static
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm ci --prefix frontend && VITE_API_URL=https://edusmart-backend.onrender.com/api/v1 npm run build --prefix frontend
+    staticPublishPath: ./frontend/dist
+    routes:
+      - type: rewrite
+        source: /api/* 
+        destination: https://edusmart-backend.onrender.com/api/*
+      - type: rewrite
+        source: /socket.io/*
+        destination: https://edusmart-backend.onrender.com/socket.io/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY

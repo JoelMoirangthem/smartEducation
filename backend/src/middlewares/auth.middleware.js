@@ -4,7 +4,7 @@ const verifyToken = (token) => {
     if (!process.env.JWT_SECRET) {
         throw Object.assign(new Error("JWT_SECRET not configured"), { statusCode: 500 });
     }
-    return jwt.verify(token, process.env.JWT_SECRET);
+    return jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 };
 
 const protect = (req, res, next) => {

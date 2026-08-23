@@ -13,6 +13,33 @@ function safeDispatch(eventName, payload) {
     }
 }
 
+// ─── Helper: resolve a notice's audience as user ids ──────────────
+// Shared by create / update / delete so realtime fan-out always
+// targets exactly the people who can see the notice.
+async function gatherRecipients({ target, targetRole, classId, subjectId }, excludeUserId) {
+    const mongoose = require('mongoose');
+    const baseQuery = {};
+    if (target === 'ROLE' && targetRole && targetRole !== 'all') {
+        baseQuery.role = targetRole;
+    } else if (target === 'CLASS' && classId) {
+        baseQuery.classId = classId;
+    } else if (target === 'SUBJECT') {
+        // Resolve the subject's class authoritatively — SUBJECT notices
+        // may be stored without a denormalized classId
+        let subjectClassId = null;
+        if (subjectId) {
+            const subj = await Subject.findById(subjectId).select('classId').lean();
+            subjectClassId = subj?.classId || null;
+        }
+        if (subjectClassId) baseQuery.classId = subjectClassId;
+    }
+    if (excludeUserId) {
+        baseQuery._id = { $ne: new mongoose.Types.ObjectId(excludeUserId) };
+    }
+    const docs = await User.find(baseQuery).select('_id').lean();
+    return docs.map(u => u._id);
+}
+
 // ─── CREATE ───────────────────────────────────────────────────────
 const createNotice = async (req, res) => {
     try {
@@ -80,36 +107,15 @@ const createNotice = async (req, res) => {
         // Gather recipients (Skip the producer!)
         let recipientIds = [];
         try {
-            const mongoose = require('mongoose');
-            const creatorId = req.user.id || req.user._id;
-            const creatorObjectId = new mongoose.Types.ObjectId(creatorId);
-
-            const baseQuery = {};
-            if (target === 'ROLE' && targetRole && targetRole !== 'all') {
-                baseQuery.role = targetRole;
-            } else if (target === 'CLASS' && classId) {
-                baseQuery.classId = classId;
-            } else if (target === 'SUBJECT') {
-                // Resolve the subject's class authoritatively — SUBJECT notices
-                // may be created without a classId in the body
-                let subjectClassId = notice.subjectId?.classId || null;
-                if (!subjectClassId && subjectId) {
-                    const subj = await Subject.findById(subjectId).select('classId').lean();
-                    subjectClassId = subj?.classId || null;
-                }
-                if (subjectClassId) baseQuery.classId = subjectClassId;
-            }
-
-            // Always exclude the producer
-            recipientIds = (await User.find({
-                ...baseQuery,
-                _id: { $ne: creatorObjectId }
-            }).select('_id')).map(u => u._id);
+            recipientIds = await gatherRecipients(
+                { target, targetRole, classId, subjectId },
+                req.user.id || req.user._id
+            );
         } catch (recErr) {
             console.error('[notice/create] error gathering recipients:', recErr.message);
         }
 
-        safeDispatch('NOTICE_CREATED', { notice, targetType, targetRole, classId, subjectId, recipients: recipientIds });
+        safeDispatch('NOTICE_CREATED', { notice, targetType, targetRole, classId, subjectId, recipients: recipientIds, creatorId: req.user.id });
 
         console.log(`[notice/create] ✅ ${notice._id} created → ${recipientIds.length} recipients`);
         return res.status(201).json({ message: 'Notice created successfully', notice, targetedCount: recipientIds.length });
@@ -160,8 +166,9 @@ const buildVisibilityQuery = async (user) => {
 // ─── GET ALL ──────────────────────────────────────────────────────
 const getNotices = async (req, res) => {
     try {
-        const { role, classId } = req.user;
-        const { page = 1, limit = 10, subjectId, targetType, targetRole } = req.query;
+        const { parsePagination } = require('../utils/pagination');
+        const { page, limit, skip } = parsePagination(req.query, { page: 1, limit: 10 });
+        const { subjectId, targetType, targetRole } = req.query;
 
         const query = await buildVisibilityQuery(req.user);
 
@@ -169,17 +176,18 @@ const getNotices = async (req, res) => {
         if (targetType) query.targetType = targetType;
         if (targetRole) query.targetRole = targetRole;
 
-        const notices = await Notice.find(query)
-            .populate('createdBy', 'name email')
-            .populate('classId', 'name')
-            .populate('subjectId', 'name code')
-            .sort({ createdAt: -1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit);
+        const [notices, total] = await Promise.all([
+            Notice.find(query)
+                .populate('createdBy', 'name email')
+                .populate('classId', 'name')
+                .populate('subjectId', 'name code')
+                .sort({ createdAt: -1 })
+                .limit(limit)
+                .skip(skip),
+            Notice.countDocuments(query)
+        ]);
 
-        const total = await Notice.countDocuments(query);
-
-        return res.status(200).json({ notices, currentPage: parseInt(page), totalPages: Math.ceil(total / limit), total });
+        return res.status(200).json({ notices, currentPage: page, totalPages: Math.ceil(total / limit), total, limit });
     } catch (error) {
         console.error('[notice/get]', error);
         return res.status(500).json({ error: 'Failed to fetch notices' });
@@ -227,8 +235,37 @@ const updateNotice = async (req, res) => {
         notice.priority = priority || notice.priority;
         notice.expiresAt = expiresAt || notice.expiresAt;
         await notice.save();
-        return res.json({ message: 'Updated', notice });
+
+        // Re-read populated so every client receives exactly the shape
+        // the list endpoint returns
+        const populated = await Notice.findById(notice._id)
+            .populate('createdBy', 'name email')
+            .populate('classId', 'name')
+            .populate('subjectId', 'name code');
+
+        let recipients = [];
+        try {
+            recipients = await gatherRecipients({
+                target: notice.targetType,
+                targetRole: notice.targetRole,
+                classId: notice.classId,
+                subjectId: notice.subjectId || undefined
+            }, req.user.id);
+        } catch (recErr) {
+            console.error('[notice/update] error gathering recipients:', recErr.message);
+        }
+
+        safeDispatch('NOTICE_UPDATED', {
+            notice: populated,
+            targetType: notice.targetType,
+            targetRole: notice.targetRole,
+            classId: notice.classId,
+            recipients
+        });
+
+        return res.json({ message: 'Updated', notice: populated });
     } catch (error) {
+        console.error('[notice/update]', error);
         return res.status(500).json({ error: 'Failed' });
     }
 };
@@ -243,8 +280,31 @@ const deleteNotice = async (req, res) => {
         }
         notice.isActive = false;
         await notice.save();
-        return res.json({ message: 'Deleted' });
+
+        let recipients = [];
+        try {
+            recipients = await gatherRecipients({
+                target: notice.targetType,
+                targetRole: notice.targetRole,
+                classId: notice.classId,
+                subjectId: notice.subjectId || undefined
+            }, req.user.id);
+        } catch (recErr) {
+            console.error('[notice/delete] error gathering recipients:', recErr.message);
+        }
+
+        safeDispatch('NOTICE_DELETED', {
+            noticeId: notice._id,
+            targetType: notice.targetType,
+            targetRole: notice.targetRole,
+            classId: notice.classId,
+            recipients,
+            creatorId: notice.createdBy
+        });
+
+        return res.json({ message: 'Deleted', noticeId: notice._id });
     } catch (error) {
+        console.error('[notice/delete]', error);
         return res.status(500).json({ error: 'Failed' });
     }
 };

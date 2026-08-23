@@ -1,5 +1,7 @@
 const Inventory = require("../models/inventory.model");
 
+const INVENTORY_ALLOWED = ["name","category","quantity","purchasePrice","location","status","assignedTo","classId","description","purchaseDate"];
+const pickInventory = (b)=>{const o={}; for(const k of INVENTORY_ALLOWED) if(b[k]!==undefined) o[k]=b[k]; return o;};
 // Add item (admin)
 const addItem = async (req, res) => {
     try {
@@ -7,7 +9,7 @@ const addItem = async (req, res) => {
             return res.status(403).json({ message: "Only admins can manage inventory" });
         }
         const assetCode = req.body.assetCode || `INV-${Date.now().toString(36).toUpperCase()}`;
-        const item = await Inventory.create({ ...req.body, assetCode });
+        const item = await Inventory.create({ ...pickInventory(req.body), assetCode });
         res.status(201).json(item);
     } catch (error) {
         res.status(500).json({ message: "Server error", error: error.message });
@@ -37,7 +39,7 @@ const getItems = async (req, res) => {
 const updateItem = async (req, res) => {
     try {
         if (req.user.role !== "admin") return res.status(403).json({ message: "Access denied" });
-        const item = await Inventory.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const item = await Inventory.findByIdAndUpdate(req.params.id, pickInventory(req.body), { new: true });
         if (!item) return res.status(404).json({ message: "Item not found" });
         res.json(item);
     } catch (error) {

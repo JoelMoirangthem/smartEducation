@@ -88,7 +88,7 @@ export default function Attendance() {
                     .catch(error => console.error("Failed to fetch student stats:", error));
             }
             Promise.resolve().then(() => setLoading(false));
-            return () => { socket.off("attendance_update"); disconnectSocket(); };
+            return () => { socket.off("attendance_update"); socket.off("connect"); socket.off("disconnect"); };
         } catch { Promise.resolve().then(() => setLoading(false)); }
     }, []);
 

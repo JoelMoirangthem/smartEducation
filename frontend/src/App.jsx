@@ -1,103 +1,108 @@
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import { ThemeProvider } from './context/ThemeContext';
-import { BrowserRouter as Router, Routes, Route, Outlet } from "react-router-dom";
-import LoginRoleSelection from "./pages/LoginRoleSelection";
-import LoginTeacher from "./pages/LoginTeacher";
-import LoginStudent from "./pages/LoginStudent";
-import LoginAdmin from "./pages/LoginAdmin";
-import RegisterAdmin from "./pages/RegisterAdmin";
-import Dashboard from "./pages/Dashboard";
-import Profile from "./pages/Profile";
-import Notes from "./pages/Notes";
-import Attendance from "./pages/Attendance";
-import Marks from "./pages/Marks";
-import Notices from "./pages/Notices";
-import Chat from "./pages/Chat";
-import FaceRegister from "./pages/FaceRegister";
-import FaceAttendance from "./pages/FaceAttendance";
-import VideoAttendance from "./pages/VideoAttendance";
+import { AuthProvider } from './context/AuthContext';
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import ProtectedRoute from "./routes/ProtectedRoute";
-import SidebarLayout from "./components/SidebarLayout";
-import PreLoginLayout from "./components/PreLoginLayout";
-import PrivateLayout from "./components/PrivateLayout";
+import PageLoader from "./components/PageLoader";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { ToastContainer } from 'react-toastify';
+const PreLoginLayout = lazy(() => import("./components/PreLoginLayout"));
+const PrivateLayout = lazy(() => import("./components/PrivateLayout"));
+const SidebarLayout = lazy(() => import("./components/SidebarLayout"));
 
-// Admin Pages
-import AdminDashboard from "./pages/admin/AdminDashboard";
-import ManageAcademic from "./pages/admin/ManageAcademic";
-import ManageUsers from "./pages/admin/ManageUsers";
+// Lazy — each page split into its own chunk (vercel bundle- dynamic imports)
+const LoginRoleSelection = lazy(() => import("./pages/LoginRoleSelection"));
+const LoginTeacher = lazy(() => import("./pages/LoginTeacher"));
+const LoginStudent = lazy(() => import("./pages/LoginStudent"));
+const LoginAdmin = lazy(() => import("./pages/LoginAdmin"));
+const RegisterAdmin = lazy(() => import("./pages/RegisterAdmin"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Notes = lazy(() => import("./pages/Notes"));
+const Attendance = lazy(() => import("./pages/Attendance"));
+const Marks = lazy(() => import("./pages/Marks"));
+const Notices = lazy(() => import("./pages/Notices"));
+const Chat = lazy(() => import("./pages/Chat"));
+const FaceRegister = lazy(() => import("./pages/FaceRegister"));
+const FaceAttendance = lazy(() => import("./pages/FaceAttendance"));
+const VideoAttendance = lazy(() => import("./pages/VideoAttendance"));
+const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
+const ManageAcademic = lazy(() => import("./pages/admin/ManageAcademic"));
+const ManageUsers = lazy(() => import("./pages/admin/ManageUsers"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
-function App() {
+export default function App() {
   return (
     <ThemeProvider>
-      <Router>
-        <ToastContainer
-          position="top-right"
-          autoClose={5000}
-          hideProgressBar={false}
-          newestOnTop
-          closeOnClick
-          rtl={false}
-          pauseOnFocusLoss
-          draggable
-          pauseOnHover
-          theme="dark"
-        />
-        <Routes>
-          {/* Public Authentication Routes */}
-          <Route element={<PreLoginLayout />}>
-            <Route path="/" element={<LoginRoleSelection />} />
-            <Route path="login/teacher" element={<LoginTeacher />} />
-            <Route path="login/student" element={<LoginStudent />} />
-            <Route path="login/admin" element={<LoginAdmin />} />
-            <Route path="register/admin" element={<RegisterAdmin />} />
-          </Route>
+      <AuthProvider>
+        <Router>
+          <ErrorBoundary>
+            <Suspense fallback={<PageLoader />}>
+              <ToastContainer
+                position="top-right"
+                autoClose={4000}
+                hideProgressBar={false}
+                newestOnTop
+                closeOnClick
+                rtl={false}
+                pauseOnFocusLoss
+                draggable
+                pauseOnHover
+                theme="dark"
+              />
+              <Routes>
+                {/* Public */}
+                <Route element={<PreLoginLayout />}>
+                  <Route path="/" element={<LoginRoleSelection />} />
+                  <Route path="login/teacher" element={<LoginTeacher />} />
+                  <Route path="login/student" element={<LoginStudent />} />
+                  <Route path="login/admin" element={<LoginAdmin />} />
+                  <Route path="register/admin" element={<RegisterAdmin />} />
+                </Route>
 
-          {/* Protected Routes with Sidebar Navigation */}
-          <Route element={<PrivateLayout />}>
-            {/* Admin Routes */}
-            <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
-              <Route element={<SidebarLayout />}>
-                <Route path="admin/dashboard" element={<AdminDashboard />} />
-                <Route path="admin/academic" element={<ManageAcademic />} />
-                <Route path="admin/users" element={<ManageUsers />} />
-              </Route>
-            </Route>
+                {/* Protected */}
+                <Route element={<PrivateLayout />}>
+                  <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
+                    <Route element={<SidebarLayout />}>
+                      <Route path="admin/dashboard" element={<AdminDashboard />} />
+                      <Route path="admin/academic" element={<ManageAcademic />} />
+                      <Route path="admin/users" element={<ManageUsers />} />
+                    </Route>
+                  </Route>
 
-            {/* Routes accessible by Teacher, Student, and Admin */}
-            <Route element={<ProtectedRoute allowedRoles={['teacher', 'student', 'admin']} />}>
-              <Route element={<SidebarLayout />}>
-                <Route path="dashboard" element={<Dashboard />} />
-                <Route path="profile" element={<Profile />} />
-                <Route path="notices" element={<Notices />} />
-                <Route path="chat" element={<Chat />} />
-              </Route>
-            </Route>
+                  <Route element={<ProtectedRoute allowedRoles={['teacher', 'student', 'admin']} />}>
+                    <Route element={<SidebarLayout />}>
+                      <Route path="dashboard" element={<Dashboard />} />
+                      <Route path="profile" element={<Profile />} />
+                      <Route path="notices" element={<Notices />} />
+                      <Route path="chat" element={<Chat />} />
+                    </Route>
+                  </Route>
 
-            {/* Routes accessible ONLY by Teacher and Student */}
-            <Route element={<ProtectedRoute allowedRoles={['teacher', 'student']} />}>
-              <Route element={<SidebarLayout />}>
-                <Route path="attendance" element={<Attendance />} />
-                <Route path="notes" element={<Notes />} />
-                <Route path="marks" element={<Marks />} />
-              </Route>
-            </Route>
+                  <Route element={<ProtectedRoute allowedRoles={['teacher', 'student']} />}>
+                    <Route element={<SidebarLayout />}>
+                      <Route path="attendance" element={<Attendance />} />
+                      <Route path="notes" element={<Notes />} />
+                      <Route path="marks" element={<Marks />} />
+                    </Route>
+                  </Route>
 
-            {/* Student-only: Face Registration */}
-            <Route element={<ProtectedRoute allowedRoles={['student']} />}>
-              <Route path="face-register" element={<FaceRegister />} />
-            </Route>
+                  <Route element={<ProtectedRoute allowedRoles={['student']} />}>
+                    <Route path="face-register" element={<FaceRegister />} />
+                  </Route>
 
-            {/* Teacher-only: Face Attendance */}
-            <Route element={<ProtectedRoute allowedRoles={['teacher']} />}>
-              <Route path="face-attendance" element={<FaceAttendance />} />
-              <Route path="video-attendance/:sessionId" element={<VideoAttendance />} />
-            </Route>
-          </Route>
-        </Routes>
-      </Router>
+                  <Route element={<ProtectedRoute allowedRoles={['teacher']} />}>
+                    <Route path="face-attendance" element={<FaceAttendance />} />
+                    <Route path="video-attendance/:sessionId" element={<VideoAttendance />} />
+                  </Route>
+                </Route>
+
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
+        </Router>
+      </AuthProvider>
     </ThemeProvider>
   );
 }
-
-export default App;

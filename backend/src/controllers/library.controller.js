@@ -3,13 +3,17 @@ const LibraryIssue = require("../models/libraryIssue.model");
 const User = require("../models/user.model");
 const Notification = require("../models/notification.model");
 
+const LIBRARY_ALLOWED = ["title","author","isbn","category","subjectId","publisher","totalCopies","availableCopies","location","description"];
+const pickLibraryFields = (body) => {
+    const o={}; for(const k of LIBRARY_ALLOWED) if(body[k]!==undefined) o[k]=body[k]; return o;
+};
 // Add book (admin/librarian only)
 const addBook = async (req, res) => {
     try {
         if (req.user.role !== "admin") {
             return res.status(403).json({ message: "Only admins can add books" });
         }
-        const book = await LibraryBook.create(req.body);
+        const book = await LibraryBook.create(pickLibraryFields(req.body));
         res.status(201).json(book);
     } catch (error) {
         res.status(500).json({ message: "Server error", error: error.message });
@@ -158,7 +162,7 @@ const updateBook = async (req, res) => {
         if (req.user.role !== "admin") {
             return res.status(403).json({ message: "Only admins can update books" });
         }
-        const book = await LibraryBook.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const book = await LibraryBook.findByIdAndUpdate(req.params.id, pickLibraryFields(req.body), { new: true });
         if (!book) return res.status(404).json({ message: "Book not found" });
         res.json(book);
     } catch (error) {

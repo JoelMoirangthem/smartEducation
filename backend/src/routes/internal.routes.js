@@ -3,13 +3,31 @@
  * Transport plumbing ONLY — no agent logic lives here. Guarded by a shared secret.
  */
 const express = require("express");
+const crypto = require("crypto");
+const rateLimit = require("express-rate-limit");
 
 const router = express.Router();
 
-router.post("/emit", (req, res) => {
+// Strict rate limit: internal relay is low-volume, burst signals compromise probing
+const relayLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 60,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { message: "Too many relay requests" }
+});
+
+function constantTimeEqual(a, b) {
+    const bufA = Buffer.from(String(a || ""));
+    const bufB = Buffer.from(String(b || ""));
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
+router.post("/emit", relayLimiter, (req, res) => {
     const key = req.get("x-agent-relay-key");
     const expected = process.env.AGENT_RELAY_SECRET;
-    if (!expected || key !== expected) {
+    if (!expected || !key || !constantTimeEqual(key, expected)) {
         return res.status(401).json({ message: "Invalid relay key" });
     }
 

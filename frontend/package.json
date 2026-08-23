@@ -13,8 +13,6 @@
     "@fingerprintjs/fingerprintjs": "^5.0.1",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
-    "@splinetool/react-spline": "^4.1.0",
-    "@splinetool/runtime": "^1.12.58",
     "axios": "^1.13.5",
     "framer-motion": "^12.34.3",
     "html5-qrcode": "^2.3.8",

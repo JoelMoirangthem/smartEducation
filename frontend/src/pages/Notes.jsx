@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
 import { initializeSocket } from "../services/socket.service";
+import useSocketEvent from "../hooks/useSocketEvent";
 import {
     Upload, FileText, Download, Eye, X, CheckCircle, File, User,
     Cloud, Brain, Lightbulb, Loader2, BookOpen, Video, Image as ImgIcon
@@ -66,31 +67,28 @@ export default function Notes() {
                 .catch(() => { /* ignore subject fetch errors */ });
 
             const socket = initializeSocket(decoded.id, decoded.classId, decoded.role);
-            if (socket) {
-                const handleNewNote = data => {
-                    setNotes(prev => prev.some(n => n._id === data.note._id) ? prev : [data.note, ...prev]);
-                };
-                const handleDeletedNote = id => setNotes(prev => prev.filter(n => n._id !== id));
-
-                socket.on("note_uploaded", handleNewNote);
-                socket.on("note_deleted", handleDeletedNote);
-
-                return () => {
-                    socket.off("note_uploaded", handleNewNote);
-                    socket.off("note_deleted", handleDeletedNote);
-                };
-            }
+            // Live insert/remove of shared resources is wired below via
+            // useSocketEvent so uploads/deletes from other devices and
+            // users appear without any refresh
         } catch (e) { console.error("Socket error in Notes:", e); }
     }, [filterSubjectId]);
 
-    const fetchNotes = async (tk) => {
-        try {
-            const url = filterSubjectId ? `${API}/notes?subjectId=${filterSubjectId}` : `${API}/notes`;
-            const res = await axios.get(url, { headers: { Authorization: `Bearer ${tk}` } });
-            setNotes(res.data || []);
-        } catch { /* ignore refresh errors */ }
-        setLoading(false);
+    /* ─── Realtime sync ─────────────────────────────────────────── */
+    const noteMatchesFilter = (note) => {
+        if (!filterSubjectId) return true;
+        const sid = note?.subjectId?._id || note?.subjectId;
+        return String(sid) === String(filterSubjectId);
     };
+
+    useSocketEvent("note_uploaded", data => {
+        const note = data?.note;
+        if (!note?._id || !noteMatchesFilter(note)) return;
+        setNotes(prev => prev.some(n => n._id === note._id) ? prev : [note, ...prev]);
+    });
+
+    useSocketEvent("note_deleted", id => {
+        setNotes(prev => prev.filter(n => n._id !== id));
+    });
 
     const validateFile = (f) => {
         if (f.size > 10 * 1024 * 1024) {
@@ -110,10 +108,27 @@ export default function Notes() {
         fd.append("subjectId", uploadSubjectId); fd.append("file", file);
         try {
             const tk = localStorage.getItem("token");
-            await axios.post(`${API}/notes/upload`, fd, { headers: { Authorization: `Bearer ${tk}`, "Content-Type": "multipart/form-data" } });
+            const res = await axios.post(`${API}/notes/upload`, fd, { headers: { Authorization: `Bearer ${tk}`, "Content-Type": "multipart/form-data" } });
             toast.success("Academic resource disseminated successfully.");
             setTitle(""); setDescription(""); setUploadSubjectId(""); setFile(null); setShowUpload(false);
-            fetchNotes(tk);
+
+            // Insert the created note straight from the response so the
+            // grid updates instantly — no full refetch round-trip. The
+            // raw document is populated client-side from known state.
+            const note = res.data;
+            if (note?._id && (!filterSubjectId || String(uploadSubjectId) === String(filterSubjectId))) {
+                setNotes(prev => {
+                    const displayNote = {
+                        ...note,
+                        subjectId: subjects.find(s => s._id === uploadSubjectId) || note.subjectId,
+                        uploadedBy: user ? { _id: user.id, name: user.name } : note.uploadedBy,
+                        views: note.views || [],
+                    };
+                    return prev.some(n => n._id === note._id)
+                        ? prev.map(n => n._id === note._id ? displayNote : n)
+                        : [displayNote, ...prev];
+                });
+            }
         } catch (e) { toast.error(e.response?.data?.message || "Ingestion failed."); }
         setUploading(false);
     };
@@ -140,9 +155,13 @@ export default function Notes() {
     const handleDelete = async (id) => {
         if (!confirm("Terminate this academic resource?")) return;
         const tk = localStorage.getItem("token");
-        await axios.delete(`${API}/notes/${id}`, { headers: { Authorization: `Bearer ${tk}` } });
-        setNotes(prev => prev.filter(n => n._id !== id));
-        toast.success("Resource purged.");
+        try {
+            await axios.delete(`${API}/notes/${id}`, { headers: { Authorization: `Bearer ${tk}` } });
+            setNotes(prev => prev.filter(n => n._id !== id));
+            toast.success("Resource purged.");
+        } catch (e) {
+            toast.error(e.response?.data?.message || "Purge failed — the resource is still live.");
+        }
     };
 
     const handleAI = async (type, note) => {

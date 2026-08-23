@@ -29,6 +29,12 @@ SYS_PROMPT = ("You are EduSmart AI, a helpful, concise, and professional academi
 
 def _providers() -> list[tuple[str, AsyncOpenAI, str, int]]:
     out = []
+    if config.AGENTROUTER_API_KEY:
+        out.append(("AgentRouter", AsyncOpenAI(base_url=config.AGENTROUTER_BASE_URL,
+                                               api_key=config.AGENTROUTER_API_KEY,
+                                               timeout=config.MODEL_TIMEOUT,
+                                               default_headers={"User-Agent": config.AGENTROUTER_UA}),
+                    config.AGENTROUTER_MODEL, 8192))
     if config.SARVAM_API_KEY:
         out.append(("Sarvam", AsyncOpenAI(base_url=config.SARVAM_BASE_URL,
                                           api_key=config.SARVAM_API_KEY,

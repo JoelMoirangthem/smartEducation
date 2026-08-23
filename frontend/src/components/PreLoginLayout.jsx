@@ -2,7 +2,6 @@ import { Outlet } from 'react-router-dom';
 
 /**
  * PreLoginLayout - A layout wrapper for public authentication pages.
- * It includes the interactive 3D Spline bot as a background.
  */
 const PreLoginLayout = () => {
     return (

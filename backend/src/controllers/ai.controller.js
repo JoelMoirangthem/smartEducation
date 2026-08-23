@@ -4,10 +4,15 @@ const Mark = require("../models/mark.model");
 const User = require("../models/user.model");
 const ChatSession = require("../models/chatSession.model");
 
-// ================= AI PROVIDER CHAIN: NVIDIA (primary) → Sarvam (fallback) =================
-if (!process.env.NVIDIA_API_KEY && !process.env.SARVAM_API_KEY) {
-    console.warn("⚠️  No AI API keys set (NVIDIA_API_KEY / SARVAM_API_KEY) — AI tutor features will be disabled.");
+// ================= AI PROVIDER CHAIN: AgentRouter (primary) → Sarvam → NVIDIA (fallback) — unified agentic API =================
+if (!process.env.AGENTROUTER_API_KEY && !process.env.NVIDIA_API_KEY && !process.env.SARVAM_API_KEY) {
+    console.warn("⚠️  No AI API keys set (AGENTROUTER_API_KEY / NVIDIA_API_KEY / SARVAM_API_KEY) — AI tutor features will be disabled.");
 }
+const agentRouterClient = new OpenAI({
+    baseURL: process.env.AGENTROUTER_BASE_URL || "https://agentrouter.org/v1",
+    apiKey: process.env.AGENTROUTER_API_KEY || "",
+    defaultHeaders: { "User-Agent": process.env.AGENTROUTER_USER_AGENT || "opencode/1.0.0" }
+});
 const nvidiaClient = new OpenAI({
     baseURL: process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1",
     apiKey: process.env.NVIDIA_API_KEY || ""
@@ -17,17 +22,19 @@ const sarvamClient = new OpenAI({
     apiKey: process.env.SARVAM_API_KEY || ""
 });
 
+const AGENTROUTER_MODEL = process.env.AGENTROUTER_MODEL || "gpt-5.6-sol";
 const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "openai/gpt-oss-120b";
 const ASSISTANT_MODEL = process.env.ASSISTANT_MODEL || "sarvam-105b-conversations";
 
-// Provider chain: Sarvam (fast) → NVIDIA (reasoning fallback)
+// Provider chain: AgentRouter (agentic, primary) → Sarvam (fast) → NVIDIA (reasoning fallback)
 const PROVIDERS = [
+    { name: "AgentRouter", client: agentRouterClient, model: AGENTROUTER_MODEL, enabled: !!process.env.AGENTROUTER_API_KEY, maxTokens: 8192 },
     { name: "Sarvam", client: sarvamClient, model: ASSISTANT_MODEL, enabled: !!process.env.SARVAM_API_KEY, maxTokens: 4096 },
     { name: "NVIDIA", client: nvidiaClient, model: NVIDIA_MODEL, enabled: !!process.env.NVIDIA_API_KEY, maxTokens: 8192 }
 ];
 const SYS_PROMPT = "You are EduSmart AI, a helpful, concise, and professional academic assistant for students and teachers in an education platform.";
 
-// ================= UNIFIED NON-STREAMING LLM CALL (NVIDIA → Sarvam) =================
+// ================= UNIFIED NON-STREAMING LLM CALL (AgentRouter → Sarvam → NVIDIA) =================
 const unifiedLLMCall = async ({ prompt, isJson = false }) => {
     const messages = [
         {

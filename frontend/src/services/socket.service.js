@@ -5,8 +5,10 @@ let pendingAuth = null;
 let connectHandler = null;
 
 export const initializeSocket = (userId, classId, role) => {
-    const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
-    const SOCKET_URL = BASE_URL.replace(/\/api\/v1\/?$/, '').replace(/\/api$/, '');
+    const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+    const SOCKET_URL = BASE_URL.startsWith('http')
+        ? BASE_URL.replace(/\/api\/v1\/?$/, '').replace(/\/api\/?$/, '')
+        : window.location.origin;
 
     // Store latest auth data
     pendingAuth = { userId, classId, role };

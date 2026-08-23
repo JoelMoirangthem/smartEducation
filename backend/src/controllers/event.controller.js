@@ -2,13 +2,19 @@ const Event = require("../models/event.model");
 const Notification = require("../models/notification.model");
 const User = require("../models/user.model");
 
+const EVENT_ALLOWED_CREATE = ["title","description","eventType","startDate","endDate","venue","targetAudience","classId","subjectId","isActive"];
+const pickEventFields = (body) => {
+    const out = {};
+    for (const k of EVENT_ALLOWED_CREATE) if (body[k] !== undefined) out[k] = body[k];
+    return out;
+};
 // Create event (admin/teacher)
 const createEvent = async (req, res) => {
     try {
         if (!["admin", "teacher"].includes(req.user.role)) {
             return res.status(403).json({ message: "Access denied" });
         }
-        const event = await Event.create({ ...req.body, createdBy: req.user.id });
+        const event = await Event.create({ ...pickEventFields(req.body), createdBy: req.user.id });
 
         // Notify target audience
         let recipients = [];
@@ -74,7 +80,7 @@ const updateEvent = async (req, res) => {
         if (req.user.role !== "admin" && event.createdBy.toString() !== req.user.id) {
             return res.status(403).json({ message: "Not authorized" });
         }
-        Object.assign(event, req.body);
+        Object.assign(event, pickEventFields(req.body));
         await event.save();
         res.json(event);
     } catch (error) {

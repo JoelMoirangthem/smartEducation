@@ -164,19 +164,22 @@ const login = async (req, res) => {
         const normalizedEmail = String(email).trim().toLowerCase();
         const user = await User.findOne({ email: normalizedEmail });
 
+        // Constant-time enumeration defense: always do bcrypt compare path
+        const dummyHash = "$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalid12";
         if (!user) {
-            return res.status(400).json({ message: "User not found" });
+            await bcrypt.compare(password, dummyHash);
+            return res.status(401).json({ message: "Invalid credentials" });
         }
 
-        // Security Check: Verify Role
+        // Security Check: Verify Role — generic message to avoid enumeration via role probe
         // If role is provided in request (e.g. from specific login page), match it.
         if (role && user.role !== role) {
-            return res.status(403).json({ message: `Access denied. You are not a ${role}.` });
+            return res.status(401).json({ message: "Invalid credentials" });
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(400).json({ message: "Invalid credentials" });
+            return res.status(401).json({ message: "Invalid credentials" });
         }
 
         const token = jwt.sign(

@@ -50,7 +50,7 @@ const markSchema = new mongoose.Schema({
 });
 
 // Indexes for fast querying
-markSchema.index({ studentId: 1, subjectId: 1, examType: 1 });
+markSchema.index({ studentId: 1, subjectId: 1, examType: 1 }, { unique: true, partialFilterExpression: { studentId: { $exists: true } } });
 markSchema.index({ classId: 1, subjectId: 1 });
 
 // Virtual for percentage

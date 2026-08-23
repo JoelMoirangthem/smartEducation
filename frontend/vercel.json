@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "https://edusmart-backend.onrender.com/api/$1" },
+    { "source": "/socket.io/(.*)", "destination": "https://edusmart-backend.onrender.com/socket.io/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}

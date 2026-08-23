@@ -21,7 +21,11 @@ const addMark = async (req, res) => {
             return res.status(404).json({ message: "Student not found" });
         }
 
-        // 3. Create Mark
+        // 3. Create Mark — idempotent: update if same (student, subject, examType) already exists
+        const existing = await Mark.findOne({ studentId, subjectId, examType });
+        if (existing) {
+            return res.status(409).json({ message: `Mark already exists for this examType. Use PUT /marks/${existing._id} to update.`, markId: existing._id });
+        }
         const mark = await Mark.create({
             studentId,
             uploadedBy: teacherId,
@@ -74,13 +78,21 @@ const addMark = async (req, res) => {
                     examType
                 }
             };
+            // Emit notification to student personal room
             io.to(`user:${studentId}`).emit("new_notification", socketPayload);
+            // Emit marks update to student (personal) and class room for redundancy
+            // and to teacher's other devices for live sync without refresh
             io.to(`user:${studentId}`).emit("marks_updated", markPopulated);
+            if (subject.classId) io.to(`class:${subject.classId}`).emit("marks_updated", markPopulated);
+            io.to(`user:${teacherId}`).emit("marks_updated", markPopulated);
         }
 
         res.status(201).json(markPopulated);
 
     } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ message: "Duplicate mark: this student already has a mark for this examType in this subject" });
+        }
         console.error("Broadcast Execution Failure:", error);
         res.status(500).json({ message: "Dissemination failure", error: error.message });
     }
@@ -183,8 +195,12 @@ const updateMark = async (req, res) => {
                     examType: mark.examType
                 }
             };
-            io.to(`user:${mark.studentId}`).emit("new_notification", socketPayload);
-            io.to(`user:${mark.studentId}`).emit("marks_updated", markPopulated);
+            const studentIdStr = mark.studentId.toString();
+            const classId = mark.classId || mark.subjectId?.classId;
+            io.to(`user:${studentIdStr}`).emit("new_notification", socketPayload);
+            io.to(`user:${studentIdStr}`).emit("marks_updated", markPopulated);
+            if (classId) io.to(`class:${classId}`).emit("marks_updated", markPopulated);
+            io.to(`user:${teacherId}`).emit("marks_updated", markPopulated);
         }
 
         res.json(markPopulated);

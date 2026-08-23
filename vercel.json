@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npm run build --prefix frontend",
+  "outputDirectory": "frontend/dist",
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "https://edusmart-backend.onrender.com/api/$1" },
+    { "source": "/socket.io/(.*)", "destination": "https://edusmart-backend.onrender.com/socket.io/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

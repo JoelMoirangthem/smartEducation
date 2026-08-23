@@ -1,73 +1,81 @@
-import { useEffect, useRef } from "react";
-import { ArrowUp, Loader2, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowUp, Square, Plus, Sparkles } from "lucide-react";
 
-/** Auto-growing input with send / stop control. */
-export default function ChatInput({ value, onChange, onSend, onStop, disabled, streaming, placeholder, accent = "var(--c-primary)" }) {
-    const textareaRef = useRef(null);
+// Claude input — centered pill, paper, 760 max, no glass
+export default function ChatInput({ value, onChange, onSend, onStop, disabled, streaming, placeholder, accent = "#D97706" }) {
+  const ref = useRef(null);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!value && ref.current) ref.current.style.height = "auto"; }, [value]);
+  const onInput = (e) => {
+    onChange(e.target.value);
+    e.target.style.height = "auto";
+    e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+  };
+  const onKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); }
+  };
 
-    // Reset height when the value is cleared externally (after send).
-    useEffect(() => {
-        if (!value && textareaRef.current) textareaRef.current.style.height = "auto";
-    }, [value]);
-
-    const handleChange = (e) => {
-        onChange(e.target.value);
-        e.target.style.height = "auto";
-        e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
-    };
-
-    const handleKeyDown = (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            onSend();
-        }
-    };
-
-    return (
+  return (
+    <div style={{
+      position: "absolute", left: 0, right: 0, bottom: 0,
+      padding: "16px 16px 14px",
+      background: "linear-gradient(to top, var(--ag-bg) 68%, transparent)",
+      pointerEvents: "none",
+    }}>
+      <div style={{ maxWidth: 760, margin: "0 auto", pointerEvents: "auto" }}>
         <div style={{
-            position: "absolute", bottom: 0, left: 0, right: 0,
-            padding: "24px 20px", background: "linear-gradient(transparent, var(--c-bg) 50%)",
-            pointerEvents: "none",
+          display: "flex", alignItems: "flex-end", gap: 8, padding: "8px 10px 8px 12px",
+          borderRadius: 24, background: "var(--ag-panel)", border: `1px solid ${focused ? "var(--ag-border-strong)" : "var(--ag-border)"}`,
+          boxShadow: focused ? "0 4px 20px rgba(0,0,0,0.06)" : "0 2px 10px rgba(0,0,0,0.04)",
+          transition: "all 0.14s",
         }}>
-            <div className="ag-glass" style={{
-                maxWidth: 720, margin: "0 auto", borderRadius: 20, padding: "8px 12px",
-                display: "flex", alignItems: "flex-end", gap: 8,
-                boxShadow: "0 20px 50px rgba(0,0,0,0.15)", pointerEvents: "auto",
-            }}>
-                <textarea
-                    ref={textareaRef}
-                    value={value}
-                    onChange={handleChange}
-                    onKeyDown={handleKeyDown}
-                    placeholder={placeholder}
-                    rows={1}
-                    style={{
-                        flex: 1, background: "transparent", border: "none", outline: "none",
-                        color: "var(--c-text)", padding: "10px 6px", fontSize: "0.95rem",
-                        resize: "none", maxHeight: 160, fontFamily: "inherit", lineHeight: "1.5", fontWeight: 500,
-                    }}
-                />
-                {streaming ? (
-                    <button onClick={onStop} title="Stop generating" style={{
-                        width: 40, height: 40, borderRadius: 12, border: "none",
-                        background: "#ef444422", color: "#ef4444", cursor: "pointer",
-                        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                    }}>
-                        <Square size={15} fill="currentColor" />
-                    </button>
-                ) : (
-                    <button onClick={onSend} disabled={disabled} style={{
-                        width: 40, height: 40, borderRadius: 12, border: "none",
-                        background: !disabled ? accent : "var(--c-surface-hover)",
-                        color: !disabled ? "white" : "var(--c-muted)",
-                        cursor: !disabled ? "pointer" : "default",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        transition: "all 0.2s", flexShrink: 0,
-                    }}>
-                        {disabled && value.trim() ? <Loader2 size={18} className="animate-spin" /> : <ArrowUp size={20} />}
-                    </button>
-                )}
-            </div>
+          <button type="button" title="Attach" style={{
+            width: 32, height: 32, borderRadius: 999, border: "1px solid var(--ag-border)", background: "var(--ag-faint)",
+            display: "grid", placeItems: "center", color: "var(--ag-muted)", cursor: "pointer", flexShrink: 0,
+          }}>
+            <Plus size={14} />
+          </button>
+          <textarea
+            ref={ref}
+            value={value}
+            onChange={onInput}
+            onKeyDown={onKeyDown}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            placeholder={placeholder}
+            rows={1}
+            style={{
+              flex: 1, background: "transparent", border: "none", outline: "none",
+              color: "var(--ag-text)", padding: "9px 0", fontSize: "0.92rem", resize: "none",
+              maxHeight: 140, fontFamily: "inherit", lineHeight: 1.55, fontWeight: 450, minHeight: 22,
+            }}
+          />
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, paddingBottom: 1 }}>
+            <span style={{ display: "none", alignItems: "center", gap: 4, fontFamily: "var(--font-mono)", fontSize: "0.62rem", color: "var(--ag-muted)", border: "1px solid var(--ag-border)", padding: "4px 7px", borderRadius: 999, background: "var(--ag-faint)" }} className="hidden sm:inline-flex">
+              <Sparkles size={10} /> {streaming ? "Generating" : "Claude"}
+            </span>
+            {streaming ? (
+              <button onClick={onStop} title="Stop" style={{
+                width: 36, height: 36, borderRadius: 999, border: "1px solid #FECACA",
+                background: "#FEF2F2", color: "#DC2626", cursor: "pointer", display: "grid", placeItems: "center",
+              }}><Square size={12} fill="currentColor" /></button>
+            ) : (
+              <button onClick={onSend} disabled={disabled} title="Send" style={{
+                width: 36, height: 36, borderRadius: 999, border: "none",
+                background: !disabled ? accent : "var(--ag-faint)",
+                color: !disabled ? "white" : "var(--ag-muted)",
+                cursor: !disabled ? "pointer" : "default", display: "grid", placeItems: "center",
+                boxShadow: !disabled ? "0 2px 8px rgba(0,0,0,0.08)" : "none", transition: "all 0.14s", flexShrink: 0,
+              }}>
+                <ArrowUp size={16} strokeWidth={2.3} />
+              </button>
+            )}
+          </div>
         </div>
-    );
+        <div style={{ textAlign: "center", marginTop: 8, color: "var(--ag-muted)", fontSize: "0.68rem", lineHeight: 1.4 }}>
+          Claude can make mistakes. Please double-check responses. • <span style={{ textDecoration: "underline", cursor: "pointer" }}>EduSmart AI</span>
+        </div>
+      </div>
+    </div>
+  );
 }

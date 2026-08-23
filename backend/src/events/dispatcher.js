@@ -8,6 +8,45 @@ class EventDispatcher extends EventEmitter {
         this.setupHandlers();
     }
 
+    // ─── Shared notice audience resolution ──────────────────────────
+    // Create, update and delete MUST reach the exact same rooms so every
+    // connected client stays in sync no matter which mutation occurred.
+    broadcastNoticeEvent(eventName, payload, { targetType, targetRole, classId, recipients, creatorId } = {}) {
+        const type = String(targetType || 'ALL').toUpperCase();
+
+        if (type === 'ALL') {
+            this.io.emit(eventName, payload);
+            return;
+        }
+
+        // Mirror to the creator's personal room so their other tabs/devices
+        // reflect the change without a manual refresh (not needed for ALL - global already covers it)
+        if (creatorId) {
+            this.io.to(`user:${creatorId.toString()}`).emit(eventName, payload);
+        }
+
+        let roomBroadcast = false;
+        if (type === 'CLASS' && classId) {
+            this.io.to(`class:${classId.toString()}`).emit(eventName, payload);
+            console.log(`📡 Broadcasted ${eventName} to class room: class:${classId}`);
+            roomBroadcast = true;
+        }
+        else if (type === 'ROLE' && targetRole && targetRole !== 'all') {
+            this.io.to(`role:${targetRole}`).emit(eventName, payload);
+            console.log(`📡 Broadcasted ${eventName} to role room: role:${targetRole}`);
+            roomBroadcast = true;
+        }
+
+        // Fallback: individual emits when rooms didn't cover the audience
+        // (e.g. SUBJECT-targeted notices resolve recipients per class)
+        if (!roomBroadcast && recipients && recipients.length > 0) {
+            recipients.forEach(uid => {
+                this.io.to(`user:${uid.toString()}`).emit(eventName, payload);
+            });
+            console.log(`📡 Individual emits for ${eventName}: ${recipients.length}`);
+        }
+    }
+
     setupHandlers() {
         // 📊 MARKS_UPLOADED event
         this.on('MARKS_UPLOADED', async (data) => {
@@ -53,7 +92,7 @@ class EventDispatcher extends EventEmitter {
         // 📢 NOTICE_CREATED event
         this.on('NOTICE_CREATED', async (data) => {
             try {
-                const { notice, targetType, targetRole, classId, subjectId, recipients } = data;
+                const { notice, targetType, targetRole, classId, subjectId, recipients, creatorId } = data;
                 console.log(`[socket/Notice] Dispatching for Type: ${targetType}, Target: ${classId || targetRole || 'ALL'}`);
 
                 // Ensure notice is ready for broadcast
@@ -63,37 +102,14 @@ class EventDispatcher extends EventEmitter {
                 }
 
                 // 1. Real-time Socket Delivery (PRIORITY - "On the spot")
-                let roomBroadcast = false;
-                if (targetType === 'CLASS' && classId) {
-                    const room = `class:${classId.toString()}`;
-                    this.io.to(room).emit('notice_created', notice);
-                    console.log(`📡 Broadcasted to class room: ${room}`);
-                    roomBroadcast = true;
-                }
-                else if (targetType === 'ALL') {
-                    this.io.emit('notice_created', notice);
-                    console.log(`📡 Global broadcast to ALL users`);
-                    roomBroadcast = true;
-                }
-                else if (targetType === 'ROLE' && targetRole) {
-                    const room = `role:${targetRole}`;
-                    this.io.to(room).emit('notice_created', notice);
-                    console.log(`📡 Broadcasted to role room: ${room}`);
-                    roomBroadcast = true;
-                }
-
-                // Fallback: emit to specific recipients individually if rooms didn't cover it
-                if (!roomBroadcast && recipients && recipients.length > 0) {
-                    recipients.forEach(uid => {
-                        this.io.to(`user:${uid.toString()}`).emit('notice_created', notice);
-                    });
-                    console.log(`📡 Individual emits: ${recipients.length}`);
-                }
+                this.broadcastNoticeEvent('notice_created', notice, {
+                    targetType, targetRole, classId, recipients, creatorId
+                });
 
                 // 2. DB Persistence (notifications in the bell icon)
                 // FINAL FILTER: Ensure the creator NEVER gets a record in the bell tray
-                const creatorId = (notice.createdBy?._id || notice.createdBy)?.toString();
-                const filteredRecipients = (recipients || []).filter(uid => uid.toString() !== creatorId);
+                const effectiveCreatorId = creatorId?.toString() || (notice.createdBy?._id || notice.createdBy)?.toString();
+                const filteredRecipients = (recipients || []).filter(uid => uid.toString() !== effectiveCreatorId);
 
                 if (filteredRecipients.length > 0) {
                     const notifications = filteredRecipients.map(studentId => ({
@@ -105,7 +121,7 @@ class EventDispatcher extends EventEmitter {
                             priority: notice.priority,
                             content: notice.content,
                             createdBy: notice.createdBy?.name || 'Admin',
-                            creatorId: creatorId
+                            creatorId: effectiveCreatorId
                         }
                     }));
 
@@ -121,6 +137,48 @@ class EventDispatcher extends EventEmitter {
                 console.log(`✅ Real-time dispatch complete for notice: ${notice._id}`);
             } catch (error) {
                 console.error('❌ Error in NOTICE_CREATED handler:', error);
+            }
+        });
+
+        // ✏️ NOTICE_UPDATED event — keeps every visible copy in sync
+        this.on('NOTICE_UPDATED', async (data) => {
+            try {
+                const { notice, targetType, targetRole, classId, recipients } = data;
+                if (!notice?._id) {
+                    console.error('[socket/Notice] ❌ NOTICE_UPDATE payload is incomplete!');
+                    return;
+                }
+                console.log(`[socket/Notice] Update dispatched for: ${notice._id}`);
+                this.broadcastNoticeEvent('notice_updated', notice, {
+                    targetType,
+                    targetRole,
+                    classId,
+                    recipients,
+                    creatorId: notice.createdBy?._id || notice.createdBy
+                });
+            } catch (error) {
+                console.error('❌ Error in NOTICE_UPDATED handler:', error);
+            }
+        });
+
+        // 🗑️ NOTICE_DELETED event — removes the card everywhere instantly
+        this.on('NOTICE_DELETED', async (data) => {
+            try {
+                const { noticeId, targetType, targetRole, classId, recipients, creatorId } = data;
+                if (!noticeId) {
+                    console.error('[socket/Notice] ❌ NOTICE_DELETE payload is incomplete!');
+                    return;
+                }
+                console.log(`[socket/Notice] Delete dispatched for: ${noticeId}`);
+                this.broadcastNoticeEvent('notice_deleted', { noticeId }, {
+                    targetType,
+                    targetRole,
+                    classId,
+                    recipients,
+                    creatorId
+                });
+            } catch (error) {
+                console.error('❌ Error in NOTICE_DELETED handler:', error);
             }
         });
 

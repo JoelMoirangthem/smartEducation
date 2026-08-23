@@ -64,7 +64,13 @@ const getUpcomingExams = async (req, res) => {
     }
 };
 
-// Update exam
+// Update exam — allowlist prevents mass-assignment of classId/createdBy etc.
+const EXAM_UPDATE_FIELDS = ["name", "examType", "subjectId", "classId", "academicYearId", "date", "startTime", "endTime", "totalMarks", "passingMarks", "venue", "instructions", "isActive"];
+const pickExamUpdates = (body) => {
+    const out = {};
+    for (const k of EXAM_UPDATE_FIELDS) if (body[k] !== undefined) out[k] = body[k];
+    return out;
+};
 const updateExam = async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.id);
@@ -72,7 +78,11 @@ const updateExam = async (req, res) => {
         if (req.user.role !== "admin" && exam.createdBy.toString() !== req.user.id) {
             return res.status(403).json({ message: "Not authorized" });
         }
-        Object.assign(exam, req.body);
+        const updates = pickExamUpdates(req.body);
+        if (updates.passingMarks !== undefined && updates.totalMarks !== undefined && updates.passingMarks > updates.totalMarks) {
+            return res.status(400).json({ message: "Passing marks cannot exceed total marks" });
+        }
+        Object.assign(exam, updates);
         await exam.save();
         res.json(exam);
     } catch (error) {

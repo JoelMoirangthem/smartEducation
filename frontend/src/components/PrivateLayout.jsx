@@ -1,18 +1,17 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
-import Scene3D from './Scene3D';
+const Scene3D = lazy(() => import('./Scene3D'));
 
 /**
- * PrivateLayout - A layout wrapper for protected routes.
- * It includes the original 3D background (Scene3D).
+ * PrivateLayout - 3D background is lazy and below-the-fold to avoid blocking landing FCP/LCP.
+ * Only loads when a protected route is actually visited.
  */
 const PrivateLayout = () => {
     return (
         <div style={{ position: 'relative', minHeight: '100vh', width: '100%' }}>
-            {/* The original 3D background used for dashboards */}
-            <Scene3D />
-
-            {/* The main content area */}
+            <Suspense fallback={null}>
+                <Scene3D />
+            </Suspense>
             <div style={{ position: 'relative', zIndex: 1 }}>
                 <Outlet />
             </div>

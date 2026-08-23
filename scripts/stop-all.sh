@@ -14,6 +14,7 @@ pkill -f "node src/server.js" 2>/dev/null && echo "  ✗ backend stopped" || ech
 pkill -f "app_deepface.py" 2>/dev/null && echo "  ✗ face service stopped" || echo "  – face service not running"
 
 # Stop Python agent service
-pkill -f "uvicorn main:app --host 127.0.0.1 --port 8000" 2>/dev/null && echo "  ✗ agent service stopped" || echo "  – agent service not running"
+pkill -f "uvicorn.*8000" 2>/dev/null && echo "  ✗ agent service stopped" || echo "  – agent service not running"
+pkill -f "agent-py.*uvicorn" 2>/dev/null && echo "  ✗ agent (alt) stopped" || true
 
 echo "Done."

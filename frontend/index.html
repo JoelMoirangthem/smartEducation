@@ -2,12 +2,36 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#03050f" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fafafb" media="(prefers-color-scheme: light)" />
+    <title>EduSmart — AI-Native Campus OS</title>
+    <meta name="description" content="EduSmart is the AI-native campus OS: Face attendance (Facenet, Fernet-encrypted), full academic suite, and an agentic AI that reads instantly and writes only with your approval." />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="http://localhost:5173/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="EduSmart — AI-Native Campus OS" />
+    <meta property="og:description" content="Face attendance, academic ops, and an agentic AI operator. Human-approval cards, realtime Socket.IO, production-grade." />
+    <meta property="og:url" content="http://localhost:5173/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Non-blocking fonts: preload as style, swap to stylesheet on load (saves 400ms render-block) -->
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=JetBrains+Mono:wght@500&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'" />
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" /></noscript>
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    <style>/* critical CSS: prevent CLS, system font fallback until Inter loads */
+      html{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+      body{margin:0;background:#03050f}
+      #root{min-height:100vh}
+    </style>
   </head>
   <body>
+    <a href="#main" class="skip-link" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden">Skip to content</a>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <noscript><div style="padding:16px;text-align:center;font-family:system-ui">Enable JavaScript to run EduSmart.</div></noscript>
   </body>
 </html>

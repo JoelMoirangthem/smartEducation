@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
-import axios from "axios";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from 'react-toastify';
 import { jwtDecode } from "jwt-decode";
 import { initializeSocket } from "../services/socket.service";
-import { Bell, Send, Clock, User, Loader2, Filter, X } from "lucide-react";
+import useSocketEvent from "../hooks/useSocketEvent";
+import { Bell, Send, Clock, User, Loader2, X, Pencil, Trash2 } from "lucide-react";
 import { Card, PageHeader, Spinner, Btn, Select, Label, Input, Textarea, Empty, Badge, SectionTitle } from "../components/PageLayout";
 
 import api from '../services/api';
-// Strip the trailing /v1 segment — this page appends /v1/... to build URLs
-const API = api.defaults.baseURL.replace(/\/v1$/, '');
+
+const ACCENT = 'var(--c-primary)';
+const EMPTY_FORM = { title: '', content: '', targetType: 'CLASS', targetRole: 'all', classId: '', subjectId: '', priority: 'medium' };
 
 const P_COLOR = {
     urgent: { bg: 'rgba(239, 68, 68, 0.12)', text: '#ef4444', border: 'rgba(239, 68, 68, 0.25)', label: 'CRITICAL' },
@@ -30,6 +31,15 @@ const PriorityBadge = ({ p }) => {
         </span>
     );
 };
+
+const iconBtnStyle = (danger) => ({
+    width: 32, height: 32, borderRadius: 9, cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    border: `1px solid ${danger ? 'rgba(239, 68, 68, 0.25)' : 'var(--c-border)'}`,
+    background: danger ? 'rgba(239, 68, 68, 0.08)' : 'var(--c-surface)',
+    color: danger ? '#ef4444' : 'var(--c-muted)',
+    transition: 'all 0.15s ease',
+});
 
 const formatTimeAgo = (date) => {
     const now = new Date();
@@ -56,76 +66,157 @@ export default function Notices() {
     const [posting, setPosting] = useState(false);
     const [filterSubject, setFilterSubject] = useState("");
     const [showForm, setShowForm] = useState(false);
-    const [form, setForm] = useState({ title: '', content: '', targetType: 'CLASS', targetRole: 'all', classId: '', subjectId: '', priority: 'medium' });
+    const [form, setForm] = useState(EMPTY_FORM);
+    const [editingId, setEditingId] = useState(null);
+    const [deletingId, setDeletingId] = useState(null);
 
+    /* ─── Bootstrap: identity, socket, academic lists ───────────── */
     useEffect(() => {
         const token = localStorage.getItem("token");
         if (!token) return;
         try {
             const decoded = jwtDecode(token);
-            Promise.resolve().then(() => {
-                setUser(decoded);
-                if (decoded.role === "teacher" && decoded.managedClassIds?.length > 0) {
-                    setForm(p => ({ ...p, classId: decoded.managedClassIds[0] }));
-                }
-            });
-            let noticesUrl = `${API}/v1/notices?limit=50`;
-            if (filterSubject) noticesUrl += `&subjectId=${filterSubject}`;
-            axios.get(noticesUrl, { headers: { Authorization: `Bearer ${token}` } })
-                .then(res => { setNotices(res.data.notices || []); setLoading(false); })
-                .catch(e => { console.error(e); setLoading(false); });
-            const acadBase = decoded.role === 'admin' ? `${API}/v1/admin` : `${API}/v1/user`;
+            setUser(decoded);
+            if (decoded.role === "teacher" && decoded.managedClassIds?.length > 0) {
+                setForm(p => ({ ...p, classId: decoded.managedClassIds[0] }));
+            }
+            initializeSocket(decoded.id, decoded.classId, decoded.role);
+
+            const acadBase = decoded.role === 'admin' ? '/admin' : '/user';
             Promise.all([
-                axios.get(`${acadBase}/classes`, { headers: { Authorization: `Bearer ${token}` } }),
-                axios.get(`${acadBase}/subjects`, { headers: { Authorization: `Bearer ${token}` } }),
+                api.get(`${acadBase}/classes`),
+                api.get(`${acadBase}/subjects`),
             ])
                 .then(([c, s]) => {
                     if (decoded.role === 'admin') { setClasses(c.data.classes || []); setSubjects(s.data.subjects || []); }
                     else { setClasses(c.data || []); setSubjects(s.data || []); }
                 })
                 .catch(() => { /* ignore academic fetch errors */ });
-            const socket = initializeSocket(decoded.id, decoded.classId, decoded.role);
-            if (socket) {
-                const h = n => setNotices(prev => prev.some(x => x._id === n._id) ? prev : [n, ...prev]);
-                socket.on("notice_created", h);
-                return () => socket.off("notice_created", h);
-            }
         } catch { /* token decode failed */ }
-    }, [filterSubject]);
+    }, []);
 
-    const fetchNotices = async (tk) => {
+    /* ─── Data loading (re-runs when the subject filter changes) ── */
+    const loadNotices = useCallback(async () => {
         try {
-            let url = `${API}/v1/notices?limit=50`;
-            if (filterSubject) url += `&subjectId=${filterSubject}`;
-            const res = await axios.get(url, { headers: { Authorization: `Bearer ${tk}` } });
+            const params = { limit: 50 };
+            if (filterSubject) params.subjectId = filterSubject;
+            const res = await api.get('/notices', { params });
             setNotices(res.data.notices || []);
         } catch (e) { console.error(e); }
-        setLoading(false);
-    };
+    }, [filterSubject]);
 
-    const handlePost = async (e) => {
+    useEffect(() => {
+        let active = true;
+        loadNotices().finally(() => { if (active) setLoading(false); });
+        return () => { active = false; };
+    }, [loadNotices]);
+
+    /* ─── List helpers ──────────────────────────────────────────── */
+    const subjectIdOf = (n) => n?.subjectId?._id || n?.subjectId || null;
+    const matchesFilter = useCallback((n) =>
+        !filterSubject || subjectIdOf(n) === filterSubject, [filterSubject]);
+
+    const upsertNotice = useCallback((n) => {
+        if (!n?._id) return;
+        setNotices(prev => prev.some(x => x._id === n._id)
+            ? prev.map(x => x._id === n._id ? n : x)
+            : [n, ...prev]);
+    }, []);
+
+    const removeNotice = useCallback((id) => {
+        if (!id) return;
+        setNotices(prev => prev.filter(x => x._id !== id));
+    }, []);
+
+    /* ─── Realtime sync: create / update / delete from any client ── */
+    useSocketEvent("notice_created", n => {
+        if (n?._id && matchesFilter(n)) upsertNotice(n);
+    });
+
+    useSocketEvent("notice_updated", n => {
+        if (!n?._id) return;
+        setNotices(prev => prev.some(x => x._id === n._id)
+            ? prev.map(x => x._id === n._id ? n : x)
+            : (matchesFilter(n) ? [n, ...prev] : prev));
+    });
+
+    useSocketEvent("notice_deleted", d => {
+        removeNotice(d?.noticeId || d?._id || d);
+    });
+
+    /* ─── Mutations ─────────────────────────────────────────────── */
+    const handleSubmit = async (e) => {
         e.preventDefault(); setPosting(true);
         try {
-            const tk = localStorage.getItem("token");
-            const payload = { ...form };
-            if (payload.targetType === 'ALL') { delete payload.classId; delete payload.subjectId; payload.targetRole = 'all'; }
-            if (payload.targetType === 'ROLE') { delete payload.classId; delete payload.subjectId; }
-            if (payload.targetType === 'CLASS') { delete payload.subjectId; payload.targetRole = 'all'; }
-            if (payload.targetType === 'SUBJECT') { payload.targetRole = 'all'; }
+            if (editingId) {
+                // UPDATE — apply the populated server response instantly,
+                // no refetch required
+                const res = await api.put(`/notices/${editingId}`, {
+                    title: form.title,
+                    content: form.content,
+                    priority: form.priority,
+                });
+                const updated = res.data?.notice;
+                if (updated?._id) {
+                    setNotices(prev => prev.map(x => x._id === updated._id ? updated : x));
+                }
+                toast.success('Announcement updated — live for every member.');
+                exitEdit();
+                setShowForm(false);
+            } else {
+                // CREATE — prepend the returned notice immediately; the
+                // socket broadcast covers everyone else
+                const payload = { ...form };
+                if (payload.targetType === 'ALL') { delete payload.classId; delete payload.subjectId; payload.targetRole = 'all'; }
+                if (payload.targetType === 'ROLE') { delete payload.classId; delete payload.subjectId; }
+                if (payload.targetType === 'CLASS') { delete payload.subjectId; payload.targetRole = 'all'; }
+                if (payload.targetType === 'SUBJECT') { payload.targetRole = 'all'; }
 
-            await axios.post(`${API}/v1/notices/add`, payload, { headers: { Authorization: `Bearer ${tk}` } });
-            toast.success('Announcement broadcast successfully!');
-            setForm(p => ({ ...p, title: '', content: '', priority: 'medium', subjectId: '' }));
-            setShowForm(false);
-            await fetchNotices(tk);
-        } catch (e) {
-            toast.error(e.response?.data?.error || "Failed to post");
+                const res = await api.post('/notices/add', payload);
+                toast.success('Announcement broadcast successfully!');
+                setForm(p => ({ ...p, title: '', content: '', priority: 'medium', subjectId: '' }));
+                setShowForm(false);
+                const created = res.data?.notice;
+                if (created?._id && matchesFilter(created)) upsertNotice(created);
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.error || "Failed to post");
         }
         setPosting(false);
     };
 
+    const handleDelete = async (n) => {
+        if (!window.confirm('Delete this notice? It will disappear for all targeted members immediately.')) return;
+        const snapshot = notices;
+        setDeletingId(n._id);
+        removeNotice(n._id); // optimistic removal
+        try {
+            await api.delete(`/notices/${n._id}`);
+            toast.success('Notice removed everywhere.');
+        } catch (err) {
+            setNotices(snapshot); // rollback on failure
+            toast.error(err.response?.data?.error || 'Failed to delete');
+        }
+        setDeletingId(null);
+    };
+
+    const startEdit = (n) => {
+        setEditingId(n._id);
+        setForm(p => ({ ...p, title: n.title || '', content: n.content || '', priority: n.priority || 'medium' }));
+        setShowForm(true);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    const exitEdit = () => {
+        setEditingId(null);
+        setForm(p => ({ ...p, title: '', content: '', priority: 'medium' }));
+    };
+
     const canPost = user?.role === 'teacher' || user?.role === 'admin';
-    const ACCENT = 'var(--c-primary)';
+    const canManage = (n) => !!user && (
+        user.role === 'admin' ||
+        String(n.createdBy?._id || n.createdBy || '') === String(user.id || '')
+    );
 
     if (loading) return <Spinner label="Synchronizing bulletins…" />;
 
@@ -145,7 +236,7 @@ export default function Notices() {
                             </Select>
                         )}
                         {canPost && (
-                            <Btn accent={ACCENT} onClick={() => setShowForm(t => !t)} style={{ height: 48, minWidth: 160 }}>
+                            <Btn accent={ACCENT} onClick={() => { if (showForm) exitEdit(); setShowForm(t => !t); }} style={{ height: 48, minWidth: 160 }}>
                                 {showForm ? <X size={20} /> : <Send size={18} />} {showForm ? 'Abort' : 'Broadcast Notice'}
                             </Btn>
                         )}
@@ -155,60 +246,79 @@ export default function Notices() {
 
             <div style={{ display: 'grid', gridTemplateColumns: showForm && canPost ? '1fr 1.5fr' : '1fr', gap: 32, alignItems: 'start' }}>
                 {showForm && canPost && (
-                    <Card accent={ACCENT} style={{ position: 'sticky', top: 32, animation: 'fadeUp 0.4s ease-out' }}>
-                        <SectionTitle>Draft Announcement</SectionTitle>
-                        <form onSubmit={handlePost} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                            <div>
-                                <Label>Target Spectrum</Label>
-                                <Select accent={ACCENT} value={form.targetRole === 'teacher' && form.targetType === 'ROLE' ? 'TEACHERS' : form.targetRole === 'student' && form.targetType === 'ROLE' ? 'STUDENTS' : form.targetType}
-                                    onChange={e => {
-                                        const v = e.target.value;
-                                        if (v === 'TEACHERS') setForm(p => ({ ...p, targetType: 'ROLE', targetRole: 'teacher', classId: '', subjectId: '' }));
-                                        else if (v === 'STUDENTS') setForm(p => ({ ...p, targetType: 'ROLE', targetRole: 'student', classId: '', subjectId: '' }));
-                                        else if (v === 'ALL') setForm(p => ({ ...p, targetType: 'ALL', targetRole: 'all', classId: '', subjectId: '' }));
-                                        else setForm(p => ({ ...p, targetType: v, targetRole: 'all', classId: '', subjectId: '' }));
-                                    }}>
-                                    {user?.role === 'admin' ? (
-                                        <>
-                                            <option value="ALL">Global (Collective)</option>
-                                            <option value="TEACHERS">Educators Only</option>
-                                            <option value="STUDENTS">Scholars Only</option>
-                                            <option value="CLASS">Specific Cohort</option>
-                                            <option value="SUBJECT">Curriculum Segment</option>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <option value="CLASS">Managed Cohort</option>
-                                            <option value="SUBJECT">Assigned Curriculum</option>
-                                        </>
-                                    )}
-                                </Select>
-                            </div>
+                    <Card accent={editingId ? '#fbbf24' : ACCENT} style={{ position: 'sticky', top: 32, animation: 'fadeUp 0.4s ease-out' }}>
+                        <SectionTitle right={editingId ? <Badge color="#fbbf24">Editing Existing</Badge> : null}>
+                            {editingId ? 'Revise Announcement' : 'Draft Announcement'}
+                        </SectionTitle>
+                        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                            {!editingId && (
+                                <>
+                                    <div>
+                                        <Label>Target Spectrum</Label>
+                                        <Select accent={ACCENT} value={form.targetRole === 'teacher' && form.targetType === 'ROLE' ? 'TEACHERS' : form.targetRole === 'student' && form.targetType === 'ROLE' ? 'STUDENTS' : form.targetType}
+                                            onChange={e => {
+                                                const v = e.target.value;
+                                                if (v === 'TEACHERS') setForm(p => ({ ...p, targetType: 'ROLE', targetRole: 'teacher', classId: '', subjectId: '' }));
+                                                else if (v === 'STUDENTS') setForm(p => ({ ...p, targetType: 'ROLE', targetRole: 'student', classId: '', subjectId: '' }));
+                                                else if (v === 'ALL') setForm(p => ({ ...p, targetType: 'ALL', targetRole: 'all', classId: '', subjectId: '' }));
+                                                else setForm(p => ({ ...p, targetType: v, targetRole: 'all', classId: '', subjectId: '' }));
+                                            }}>
+                                            {user?.role === 'admin' ? (
+                                                <>
+                                                    <option value="ALL">Global (Collective)</option>
+                                                    <option value="TEACHERS">Educators Only</option>
+                                                    <option value="STUDENTS">Scholars Only</option>
+                                                    <option value="CLASS">Specific Cohort</option>
+                                                    <option value="SUBJECT">Curriculum Segment</option>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <option value="CLASS">Managed Cohort</option>
+                                                    <option value="SUBJECT">Assigned Curriculum</option>
+                                                </>
+                                            )}
+                                        </Select>
+                                    </div>
 
-                            {form.targetType === 'CLASS' && (
-                                <div><Label>Cohort Specification</Label>
-                                    <Select accent={ACCENT} value={form.classId} onChange={e => setForm(p => ({ ...p, classId: e.target.value }))} required>
-                                        <option value="">— Choose Cohort —</option>
-                                        {classes.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
-                                    </Select>
-                                </div>
-                            )}
-                            {(form.targetType === 'SUBJECT' || (user?.role === 'admin' && form.targetType === 'SUBJECT')) && (
-                                <div><Label>Curriculum Specification</Label>
-                                    <Select accent={ACCENT} value={form.subjectId} onChange={e => setForm(p => ({ ...p, subjectId: e.target.value }))} required>
-                                        <option value="">— Choose Curriculum —</option>
-                                        {subjects.map(s => <option key={s._id} value={s._id}>{s.name} ({s.code})</option>)}
-                                    </Select>
-                                </div>
+                                    {form.targetType === 'CLASS' && (
+                                        <div><Label>Cohort Specification</Label>
+                                            <Select accent={ACCENT} value={form.classId} onChange={e => setForm(p => ({ ...p, classId: e.target.value }))} required>
+                                                <option value="">— Choose Cohort —</option>
+                                                {classes.map(c => <option key={c._id} value={c._id}>{c.name}</option>)}
+                                            </Select>
+                                        </div>
+                                    )}
+                                    {(form.targetType === 'SUBJECT' || (user?.role === 'admin' && form.targetType === 'SUBJECT')) && (
+                                        <div><Label>Curriculum Specification</Label>
+                                            <Select accent={ACCENT} value={form.subjectId} onChange={e => setForm(p => ({ ...p, subjectId: e.target.value }))} required>
+                                                <option value="">— Choose Curriculum —</option>
+                                                {subjects.map(s => <option key={s._id} value={s._id}>{s.name} ({s.code})</option>)}
+                                            </Select>
+                                        </div>
+                                    )}
+                                </>
                             )}
 
                             <div><Label>Headline</Label><Input accent={ACCENT} value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="The core message title" required /></div>
                             <div><Label>Directive Content</Label><Textarea accent={ACCENT} rows={8} value={form.content} onChange={e => setForm(p => ({ ...p, content: e.target.value }))} placeholder="In-depth details and directives…" required /></div>
 
-                            <Btn accent={ACCENT} type="submit" disabled={posting} full style={{ height: 52 }}>
-                                {posting ? <Loader2 size={20} className="animate-spin" /> : <Send size={18} />}
-                                {posting ? 'Initiating Broadcast…' : 'Finalize & Broadcast'}
-                            </Btn>
+                            <div>
+                                <Label>Priority Signal</Label>
+                                <Select accent={ACCENT} value={form.priority} onChange={e => setForm(p => ({ ...p, priority: e.target.value }))}>
+                                    <option value="low">General</option>
+                                    <option value="medium">Standard</option>
+                                    <option value="high">High</option>
+                                    <option value="urgent">Critical</option>
+                                </Select>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 12 }}>
+                                <Btn accent={editingId ? '#fbbf24' : ACCENT} type="submit" disabled={posting} full style={{ height: 52 }}>
+                                    {posting ? <Loader2 size={20} className="animate-spin" /> : editingId ? <Pencil size={16} /> : <Send size={18} />}
+                                    {posting ? 'Synchronizing…' : editingId ? 'Save Changes' : 'Finalize & Broadcast'}
+                                </Btn>
+                                {editingId && <Btn ghost onClick={() => { exitEdit(); setShowForm(false); }} style={{ height: 52 }}>Cancel</Btn>}
+                            </div>
                         </form>
                     </Card>
                 )}
@@ -237,7 +347,23 @@ export default function Notices() {
                                         <div style={{ flex: 1 }}>
                                             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.2rem', fontWeight: 800, color: 'var(--c-text)', lineHeight: 1.3, margin: 0 }}>{n.title}</h3>
                                         </div>
-                                        <PriorityBadge p={n.priority} />
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            {canManage(n) && (
+                                                <>
+                                                    <button onClick={() => startEdit(n)} title="Edit notice" aria-label="Edit notice" style={iconBtnStyle(false)}
+                                                        onMouseEnter={e => { e.currentTarget.style.color = 'var(--c-text)'; e.currentTarget.style.borderColor = 'var(--c-primary)'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.color = 'var(--c-muted)'; e.currentTarget.style.borderColor = 'var(--c-border)'; }}>
+                                                        <Pencil size={14} />
+                                                    </button>
+                                                    <button onClick={() => handleDelete(n)} disabled={deletingId === n._id} title="Delete notice" aria-label="Delete notice" style={iconBtnStyle(true)}
+                                                        onMouseEnter={e => { if (deletingId !== n._id) e.currentTarget.style.background = 'rgba(239, 68, 68, 0.16)'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.08)'; }}>
+                                                        {deletingId === n._id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                                                    </button>
+                                                </>
+                                            )}
+                                            <PriorityBadge p={n.priority} />
+                                        </div>
                                     </div>
                                     <p style={{ fontSize: '1rem', color: 'var(--c-text)', opacity: 0.85, lineHeight: 1.7, marginBottom: 24, fontWeight: 500 }}>{n.content}</p>
 

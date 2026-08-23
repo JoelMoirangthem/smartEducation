@@ -42,7 +42,7 @@ io.use((socket, next) => {
     try {
         const token = socket.handshake.auth?.token;
         if (!token) return next(new Error("Authentication required"));
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
         socket.user = decoded;
         next();
     } catch (err) {
@@ -141,3 +141,27 @@ server.listen(PORT, async () => {
         console.warn(`⚠️  Python agent not reachable at ${AGENT_PY_URL} — agent features will be unavailable: ${e.message}`);
     }
 });
+
+// Graceful shutdown — drain HTTP + sockets
+async function gracefulShutdown(signal) {
+    console.log(`\n${signal} received — shutting down gracefully...`);
+    try {
+        io.close(() => console.log("Socket.IO closed"));
+        server.close(() => {
+            console.log("HTTP server closed");
+            const mongoose = require('mongoose');
+            mongoose.connection.close(false).then(() => {
+                console.log("Mongo connection closed");
+                process.exit(0);
+            });
+        });
+        setTimeout(() => { console.error("Force exit after 10s"); process.exit(1); }, 10000).unref();
+    } catch (e) {
+        console.error("Shutdown error:", e);
+        process.exit(1);
+    }
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => console.error('Unhandled Rejection:', reason));
+process.on('uncaughtException', (err) => { console.error('Uncaught Exception:', err); gracefulShutdown('uncaughtException'); });

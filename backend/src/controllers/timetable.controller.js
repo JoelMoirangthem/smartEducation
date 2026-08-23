@@ -82,13 +82,15 @@ const getTodaySchedule = async (req, res) => {
     }
 };
 
+const TIMETABLE_ALLOWED = ["classId","subjectId","teacherId","dayOfWeek","startTime","endTime","room","type","academicYearId"];
+const pickTimetable = (b)=>{const o={}; for(const k of TIMETABLE_ALLOWED) if(b[k]!==undefined) o[k]=b[k]; return o;};
 // Update timetable entry
 const updateTimetable = async (req, res) => {
     try {
         if (!["admin"].includes(req.user.role)) {
             return res.status(403).json({ message: "Only admins can update timetable" });
         }
-        const entry = await Timetable.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const entry = await Timetable.findByIdAndUpdate(req.params.id, pickTimetable(req.body), { new: true });
         if (!entry) return res.status(404).json({ message: "Entry not found" });
         res.json(entry);
     } catch (error) {

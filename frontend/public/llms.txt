@@ -1,0 +1,8 @@
+# EduSmart
+> AI-native campus OS: face attendance, academic suite, agentic AI operator.
+
+## Docs
+- / — landing + role portals
+- /dashboard — role-aware dashboard
+- /attendance — QR + face attendance
+- /chat — Tutor + Agent (human-approval cards)

@@ -64,30 +64,56 @@ const deleteClass = async (req, res) => {
         if (!cls) return res.status(404).json({ message: "Class not found" });
 
         const classId = cls._id;
+        const mongoose = require("mongoose");
+        const session = await mongoose.startSession();
+        let useTxn = true;
+        try { await session.startTransaction(); } catch { useTxn = false; }
+        const opts = useTxn ? { session } : {};
 
-        // Remove class references from users (students' classId, any teachers managing it)
-        await User.updateMany(
-            { $or: [{ classId }, { managedClassIds: classId }] },
-            { $unset: { classId: "" }, $pull: { managedClassIds: classId } }
-        );
-
-        // Delete subjects belonging to this class and clean teacher portfolios
-        const subjects = await Subject.find({ classId }).select("_id");
-        const subjectIds = subjects.map(s => s._id);
-        if (subjectIds.length > 0) {
-            await Subject.deleteMany({ _id: { $in: subjectIds } });
+        try {
+            // Remove class references from users (students' classId, any teachers managing it)
             await User.updateMany(
-                { assignedSubjectIds: { $in: subjectIds } },
-                { $pull: { assignedSubjectIds: { $in: subjectIds } } }
+                { $or: [{ classId }, { managedClassIds: classId }] },
+                { $unset: { classId: "" }, $pull: { managedClassIds: classId } },
+                opts
             );
+
+            // Delete subjects belonging to this class and clean teacher portfolios
+            const subjects = await Subject.find({ classId }).select("_id").session(useTxn ? session : null);
+            const subjectIds = subjects.map(s => s._id);
+            if (subjectIds.length > 0) {
+                await Subject.deleteMany({ _id: { $in: subjectIds } }, opts);
+                await User.updateMany(
+                    { assignedSubjectIds: { $in: subjectIds } },
+                    { $pull: { assignedSubjectIds: { $in: subjectIds } } },
+                    opts
+                );
+            }
+
+            // Delete all class-coupled records — transactional to avoid orphans
+            const Mark = require("../models/mark.model");
+            const Exam = require("../models/exam.model");
+            const Timetable = require("../models/timetable.model");
+            const Fee = require("../models/fee.model");
+            await Promise.all([
+                AttendanceSession.deleteMany({ classId }, opts),
+                Notice.deleteMany({ classId }, opts),
+                Note.deleteMany({ classId }, opts),
+                Mark.deleteMany({ classId }, opts),
+                Exam.deleteMany({ classId }, opts),
+                Timetable.deleteMany({ classId }, opts),
+                // Transport assignments / library not class-bound directly — skip
+                Fee.deleteMany({ classId }, opts).catch(()=>{}),
+            ]);
+
+            await cls.deleteOne(opts);
+            if (useTxn) await session.commitTransaction();
+        } catch (txnErr) {
+            if (useTxn) await session.abortTransaction().catch(()=>{});
+            throw txnErr;
+        } finally {
+            session.endSession();
         }
-
-        // Delete class records/notices/notes instances tied to it
-        await AttendanceSession.deleteMany({ classId });
-        await Notice.deleteMany({ classId });
-        await Note.deleteMany({ classId });
-
-        await cls.deleteOne();
 
         // Emit real-time update
         const io = req.app.get("io");

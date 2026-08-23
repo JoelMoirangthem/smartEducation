@@ -82,6 +82,7 @@ start_frontend() {
 mkdir -p "$ROOT/logs"
 [ "$FACE_ONLY" = "1" ] && start_face
 if [ "$BACKEND_ONLY" = "1" ]; then
+  start_agent
   start_backend
 fi
 if [ "$FRONTEND_ONLY" = "1" ]; then

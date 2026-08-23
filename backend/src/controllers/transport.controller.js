@@ -1,13 +1,15 @@
 const Transport = require("../models/transport.model");
 const TransportAssignment = require("../models/transportAssignment.model");
 
+const TRANSPORT_ALLOWED = ["routeName","routeNumber","startLocation","endLocation","stops","capacity","vehicleNumber","driverName","driverContact","isActive"];
+const pickTransport = (b)=>{const o={}; for(const k of TRANSPORT_ALLOWED) if(b[k]!==undefined) o[k]=b[k]; return o;};
 // Create route (admin)
 const createRoute = async (req, res) => {
     try {
         if (req.user.role !== "admin") {
             return res.status(403).json({ message: "Only admins can manage transport" });
         }
-        const route = await Transport.create(req.body);
+        const route = await Transport.create(pickTransport(req.body));
         res.status(201).json(route);
     } catch (error) {
         res.status(500).json({ message: "Server error", error: error.message });
@@ -87,7 +89,7 @@ const removeStudent = async (req, res) => {
 const updateRoute = async (req, res) => {
     try {
         if (req.user.role !== "admin") return res.status(403).json({ message: "Access denied" });
-        const route = await Transport.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const route = await Transport.findByIdAndUpdate(req.params.id, pickTransport(req.body), { new: true });
         if (!route) return res.status(404).json({ message: "Route not found" });
         res.json(route);
     } catch (error) {
